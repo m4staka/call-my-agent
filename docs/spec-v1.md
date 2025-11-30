@@ -239,3 +239,61 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
 This spec should be enough for a single developer to implement a focused v1 without accidentally building extra Twilio/WhatsApp features or Codex SDK integrations.
 ```29
+
+0. https://github.com/steipete/warelay 
+
+1. https://core.telegram.org/bots/api 
+
+2. https://developers.openai.com/codex/cli/reference/ 
+
+3. https://github.com/steipete/warelay/releases 
+
+4. https://stackoverflow.com/questions/3408780/telegram-bot-and-the-method-getupdates 
+
+5. https://core.telegram.org/method/messages.sendMessage 
+
+6. https://developers.openai.com/codex/cli/ 
+
+7. https://github.com/steipete/warelay/actions 
+
+8. https://telegram-bot-sdk.readme.io/reference/getupdates 
+
+9. https://telegram-bot-sdk.readme.io/reference/sendmessage 
+
+10. https://github.com/peterdemin/openai-cli 
+
+11. https://github.com/steipete/warelay/blob/main/AGENTS.md 
+
+12. https://github.com/Cale-Torino/Telegram_Bot_API_Quick_Example 
+
+13. https://stackoverflow.com/questions/31197659/how-to-send-request-to-telegram-bot-api 
+
+14. https://platform.openai.com/docs/api-reference/introduction 
+
+15. https://github.com/steipete/warelay/activity 
+
+16. https://www.postman.com/davtur19/telegram/request/mt6unli/getupdates 
+
+17. https://medium.com/internet-of-technology/how-to-operate-with-openai-command-line-client-b8174746f730 
+
+18. https://github.com/steipete/warelay/blob/main/LICENSE 
+
+19. https://community.latenode.com/t/switching-from-webhook-to-getupdates-in-telegram-bot-api/9806 
+
+20. https://community.openai.com/t/unable-to-run-the-command-line-interface-cli-for-openai/6197 
+
+21. https://github.com/steipete/warelay/blob/main/docs/clawd.md 
+
+22. https://hackage.haskell.org/package/telegram-bot-simple-0.8/docs/Telegram-Bot-API-GettingUpdates.html 
+
+23. https://crates.io/crates/openai-cli 
+
+24. https://github.com/steipete/warelay/blob/main/.npmrc 
+
+25. https://www.youtube.com/watch?v=VqCwI_aEv4o 
+
+26. https://gist.github.com/dideler/85de4d64f66c1966788c1b2304b9caf1 
+
+27. https://www.reddit.com/r/GPT3/comments/s0giqc/openai_commandline_interface/ 
+
+28. https://github.com/steipete/warelay/blob/main/tsconfig.json 
