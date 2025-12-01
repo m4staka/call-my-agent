@@ -4,14 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
 // Config describes the Call-my-agent configuration.
 type Config struct {
-	Telegram TelegramConfig `json:"telegram"`
-	Inbound  InboundConfig  `json:"inbound"`
-	Logging  LoggingConfig  `json:"logging"`
+	Telegram         TelegramConfig `json:"telegram"`
+	Inbound          InboundConfig  `json:"inbound"`
+	Logging          LoggingConfig  `json:"logging"`
+	SessionStorePath string         `json:"sessionStorePath"`
 }
 
 // TelegramConfig controls polling behavior.
@@ -42,6 +44,7 @@ type SessionConfig struct {
 	IdleMinutes          int      `json:"idleMinutes"`
 	ResetTriggers        []string `json:"resetTriggers"`
 	HeartbeatIdleMinutes int      `json:"heartbeatIdleMinutes"`
+	MaxMessages          int      `json:"maxMessages"`
 }
 
 // LoggingConfig controls log outputs.
@@ -80,14 +83,26 @@ func (c *Config) Validate() error {
 	if c.Inbound.Reply.Session.Scope == "" {
 		c.Inbound.Reply.Session.Scope = "per-chat"
 	}
-	if c.Inbound.Reply.Session.HeartbeatIdleMinutes == 0 {
-		c.Inbound.Reply.Session.HeartbeatIdleMinutes = 240
+	if c.Inbound.Reply.Session.HeartbeatIdleMinutes < 0 {
+		return fmt.Errorf("heartbeatIdleMinutes cannot be negative")
+	}
+	if c.Inbound.Reply.Session.MaxMessages <= 0 {
+		c.Inbound.Reply.Session.MaxMessages = 40
 	}
 	if c.Inbound.HeartbeatMinutes < 0 {
 		return fmt.Errorf("heartbeatMinutes cannot be negative")
 	}
 	if len(c.Inbound.Reply.Command) == 0 && c.Inbound.Reply.Mode == "command" {
 		c.Inbound.Reply.Command = []string{"codex", "exec", "{{.Task}}"}
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+	if c.Logging.File == "" {
+		c.Logging.File = "/tmp/cma.log"
+	}
+	if c.SessionStorePath == "" {
+		c.SessionStorePath = defaultSessionStorePath()
 	}
 	return nil
 }
@@ -100,4 +115,11 @@ func (c Config) Timeout() time.Duration {
 // PollInterval returns the polling interval as a duration.
 func (c Config) PollInterval() time.Duration {
 	return time.Duration(c.Telegram.PollIntervalSeconds) * time.Second
+}
+
+func defaultSessionStorePath() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".cma", "sessions.json")
+	}
+	return "sessions.json"
 }

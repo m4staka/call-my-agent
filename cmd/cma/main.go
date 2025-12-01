@@ -11,6 +11,7 @@ import (
 	"call-my-agent/pkg/codex"
 	"call-my-agent/pkg/config"
 	"call-my-agent/pkg/service"
+	"call-my-agent/pkg/store"
 	"call-my-agent/pkg/telegram"
 )
 
@@ -54,8 +55,18 @@ func heartbeat(args []string) {
 }
 
 func status(args []string) {
-	_, srv := buildService(args)
-	srv.Status(os.Stdout)
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	cfgPath := fs.String("config", "config.json", "Path to config file")
+	jsonOut := fs.Bool("json", false, "Print JSON output")
+	limit := fs.Int("limit", 0, "Limit number of sessions in status output")
+	_ = fs.Parse(args)
+
+	_, srv := buildServiceWithOptions(*cfgPath, false)
+	opts := service.StatusOptions{JSON: *jsonOut, Limit: *limit}
+	if err := srv.Status(os.Stdout, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func buildService(args []string) (config.Config, *service.Service) {
@@ -63,21 +74,36 @@ func buildService(args []string) (config.Config, *service.Service) {
 	cfgPath := fs.String("config", "config.json", "Path to config file")
 	_ = fs.Parse(args)
 
-	cfg, err := config.Load(*cfgPath)
+	return buildServiceFromPath(*cfgPath)
+}
+
+func buildServiceFromPath(cfgPath string) (config.Config, *service.Service) {
+	return buildServiceWithOptions(cfgPath, true)
+}
+
+func buildServiceWithOptions(cfgPath string, requireToken bool) (config.Config, *service.Service) {
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	token := os.Getenv(tokenEnv)
-	if token == "" {
-		fmt.Fprintf(os.Stderr, "%s is required\n", tokenEnv)
-		os.Exit(1)
+	var provider service.MessageProvider
+	if requireToken {
+		token := os.Getenv(tokenEnv)
+		if token == "" {
+			fmt.Fprintf(os.Stderr, "%s is required\n", tokenEnv)
+			os.Exit(1)
+		}
+		provider = telegram.NewProvider(token, cfg.PollInterval())
 	}
 
-	provider := telegram.NewProvider(token, cfg.PollInterval())
 	ai := codex.ExecClient{CommandTemplate: cfg.Inbound.Reply.Command}
-	srv := service.New(cfg, provider, ai, nil)
+	srv, err := service.New(cfg, provider, ai, nil, store.NewFileSessionStore(cfg.SessionStorePath))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init service: %v\n", err)
+		os.Exit(1)
+	}
 	return cfg, srv
 }
 

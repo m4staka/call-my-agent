@@ -53,7 +53,10 @@ func TestHandleMessageCommandMode(t *testing.T) {
 	}
 	provider := &fakeProvider{}
 	ai := &fakeAI{responses: []string{"reply"}}
-	srv := New(cfg, provider, ai, fixedClock{now: time.Now()})
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
 
 	if err := srv.handleMessage(context.Background(), model.InboundMessage{ChatID: "123", Text: "hi"}); err != nil {
 		t.Fatalf("handleMessage returned error: %v", err)
@@ -78,7 +81,10 @@ func TestHeartbeatSuppression(t *testing.T) {
 	clock := fixedClock{now: time.Now()}
 
 	ai := &fakeAI{responses: []string{"HEARTBEAT_OK"}}
-	srv := New(cfg, provider, ai, clock)
+	srv, err := New(cfg, provider, ai, clock, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
 
 	sess, _ := srv.sessions.Get("123", "hello")
 	srv.sessions.Append(sess, "user", "hello")
@@ -97,5 +103,9 @@ func TestHeartbeatSuppression(t *testing.T) {
 	}
 	if len(provider.sent) != 1 || provider.sent[0].Text != "proactive" {
 		t.Fatalf("expected proactive message, got %+v", provider.sent)
+	}
+	sessions := srv.sessions.Snapshot()
+	if len(sessions) != 1 || len(sessions[0].Messages) != 3 {
+		t.Fatalf("expected heartbeat messages recorded, got %+v", sessions)
 	}
 }

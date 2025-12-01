@@ -29,7 +29,7 @@ type Session struct {
 // AllowedChat returns true when the inbound chat ID is permitted.
 func AllowedChat(chatID string, allowed []string) bool {
 	for _, allowedID := range allowed {
-		if chatID == allowedID {
+		if allowedID == "*" || chatID == allowedID {
 			return true
 		}
 	}
