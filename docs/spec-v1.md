@@ -1,8 +1,8 @@
-# Telegram Codex Relay – v1 Spec
+# Call-my-agent – v1 Spec
 
 ## 1. Overview
 
-Telegram Codex Relay is a small Go CLI that:
+Call-my-agent is a small Go CLI that:
 
 - Polls a Telegram bot for new messages.
 - For each allowed chat, calls **OpenAI Codex CLI** (`codex exec`) as an external process.
@@ -55,20 +55,20 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 ### 3.1 Components
 
 1. **CLI Layer**
-   - Binary name: `tg-codex` (placeholder).
+   - Binary name: `cma` (placeholder).
    - Subcommands (inspired by `warelay`’s “Command Cheat Sheet”): 9  
-     - `tg-codex relay` – main long-running worker (polls Telegram, processes auto-replies).
-     - `tg-codex heartbeat` – runs one heartbeat pass across sessions (optional, can be triggered manually).
-     - `tg-codex status` – prints recent sessions/messages from the store.
+     - `cma start` – main long-running worker (polls Telegram, processes auto-replies).
+     - `cma heartbeat` – runs one heartbeat pass across sessions (optional, can be triggered manually).
+     - `cma status` – prints recent sessions/messages from the store.
 
 2. **Config Loader**
-   - Reads a single config file at startup, analogous to `~/.warelay/warelay.json`. 10  
+   - Reads a single config file at startup, analogous to `~/.warelay/warelay.json`, and combines it with required environment variables. 10  
+   - Telegram bot token is **not** stored in the config file; it is read from an environment variable (e.g. `TELEGRAM_BOT_TOKEN`) for better secret handling.
    - Proposed structure (conceptual):
 
      ```text
-     telegram:
-       botToken: "..."
-       pollIntervalSeconds: 2
+    telegram:
+      pollIntervalSeconds: 2          # bot token from env (e.g. TELEGRAM_BOT_TOKEN)
 
      inbound:
        allowFrom: ["123456789"]         # Telegram chat IDs as strings
@@ -89,7 +89,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
      logging:
        level: "info"
-       file: "/tmp/tg-codex.log"
+       file: "/tmp/cma.log"
      ```
 
    - Keep it conceptually close to warelay’s `inbound.reply`, `session`, `heartbeatMinutes`, `logging` blocks so the implementer can look at the README and copy patterns. 11  
@@ -156,7 +156,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
      - If result is `HEARTBEAT_OK` → log only, no Telegram send.
      - Else → send message to respective chat via Telegram Provider.
 
-   - Also support a one-off `tg-codex heartbeat` CLI command that runs the same logic once (similar to `warelay heartbeat`). 19  
+   - Also support a one-off `cma heartbeat` CLI command that runs the same logic once (similar to `warelay heartbeat`). 19  
 
 7. **Access Control & Filtering**
 
@@ -167,8 +167,8 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
 8. **Logging & Status**
 
-   - File logging to a configurable path (default `/tmp/tg-codex.log`), with levels similar to `silent | error | warn | info | debug`. 21  
-   - `tg-codex status`:
+   - File logging to a configurable path (default `/tmp/cma.log`), with levels similar to `silent | error | warn | info | debug`. 21  
+   - `cma status`:
      - Reads the session store and prints:
        - recent sessions (last N by `UpdatedAt`),
        - last message and last Codex reply per session.
@@ -208,7 +208,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
 ## 5. Behavior Summary (Happy Path)
 
-1. `tg-codex relay` starts.
+1. `cma start` starts.
 2. Config and session store are loaded.
 3. Telegram Provider starts polling and pushes `InboundMessage` objects into the core loop.
 4. For each inbound message:
