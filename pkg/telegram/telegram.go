@@ -21,9 +21,15 @@ type Provider struct {
 
 // NewProvider constructs a Provider with defaults.
 func NewProvider(token string, pollInterval time.Duration) *Provider {
+	// Use an HTTP timeout that is comfortably larger than the poll interval.
+	// Telegram's getUpdates may hold the connection open for up to the
+	// requested timeout, so if the HTTP client timeout is too small we will
+	// see spurious "context deadline exceeded (Client.Timeout ...)" errors
+	// even when everything is healthy.
+	httpTimeout := pollInterval*2 + 5*time.Second
 	return &Provider{
 		Token:        token,
-		Client:       &http.Client{Timeout: 10 * time.Second},
+		Client:       &http.Client{Timeout: httpTimeout},
 		PollInterval: pollInterval,
 		baseURL:      "https://api.telegram.org",
 	}
