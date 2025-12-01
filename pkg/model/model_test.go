@@ -20,3 +20,4 @@ func TestAllowedChatWildcard(t *testing.T) {
 	}
 }
 
+

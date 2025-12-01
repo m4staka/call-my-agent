@@ -1,13 +1,13 @@
 SHELL := /bin/bash
-APP=cma
+APP=bin/cma
 
 .PHONY: build test fmt
 
 build:
-	go build -o bin/$(APP) ./cmd/cma
+	go build -o $(APP) ./cmd/cma
 
 start: build
-	@source .env && bin/$(APP) start -config config.json
+	@source .env && $(APP) start -config $(HOME)/.cma/config.json
 
 test:
 	go test ./...

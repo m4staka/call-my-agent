@@ -77,6 +77,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
          staticText: "..."              # if mode == static
          bodyPrefix: "..."              # system prompt prefix
          command: ["codex", "exec", "{{BodyStripped}}"]
+         cwd: "/home/user/project"      # optional working dir for codex CLI
          timeoutSeconds: 600
 
          session:

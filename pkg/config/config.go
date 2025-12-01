@@ -34,6 +34,7 @@ type ReplyConfig struct {
 	StaticText     string        `json:"staticText"`
 	BodyPrefix     string        `json:"bodyPrefix"`
 	Command        []string      `json:"command"`
+	Cwd            string        `json:"cwd"`
 	TimeoutSeconds int           `json:"timeoutSeconds"`
 	Session        SessionConfig `json:"session"`
 }

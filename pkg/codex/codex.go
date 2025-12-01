@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"text/template"
@@ -20,6 +21,7 @@ type AIClient interface {
 // ExecClient runs the Codex CLI as an external process.
 type ExecClient struct {
 	CommandTemplate []string
+	WorkingDir      string
 }
 
 // TemplateData defines templated fields for commands.
@@ -42,6 +44,12 @@ func (c ExecClient) Run(ctx context.Context, data TemplateData, timeout time.Dur
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	if c.WorkingDir != "" {
+		if err := validateWorkingDir(c.WorkingDir); err != nil {
+			return "", err
+		}
+		cmd.Dir = c.WorkingDir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -49,6 +57,17 @@ func (c ExecClient) Run(ctx context.Context, data TemplateData, timeout time.Dur
 		return "", fmt.Errorf("codex exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+func validateWorkingDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("codex exec failed: invalid cwd %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("codex exec failed: invalid cwd %q: not a directory", path)
+	}
+	return nil
 }
 
 func renderArgs(tmpl []string, data TemplateData) ([]string, error) {

@@ -98,7 +98,10 @@ func buildServiceWithOptions(cfgPath string, requireToken bool) (config.Config, 
 		provider = telegram.NewProvider(token, cfg.PollInterval())
 	}
 
-	ai := codex.ExecClient{CommandTemplate: cfg.Inbound.Reply.Command}
+	ai := codex.ExecClient{
+		CommandTemplate: cfg.Inbound.Reply.Command,
+		WorkingDir:      cfg.Inbound.Reply.Cwd,
+	}
 	srv, err := service.New(cfg, provider, ai, nil, store.NewFileSessionStore(cfg.SessionStorePath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init service: %v\n", err)
