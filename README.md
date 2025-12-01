@@ -25,6 +25,7 @@ The CLI reads a JSON config file (default `config.json`):
       "staticText": "Thanks for your message!",
       "bodyPrefix": "You are a helpful assistant.",
       "command": ["codex", "exec", "{{.Task}}"],
+      "cwd": "/home/me/projects/demo",
       "timeoutSeconds": 600,
       "session": {
         "scope": "per-chat",
@@ -47,6 +48,7 @@ Key notes:
 - **Allowed chats**: only chat IDs listed in `inbound.allowFrom` are processed.
 - **Reply modes**: `static` returns `staticText`; `command` shells out to the command template using `{{.Task}}`, `{{.ChatID}}`, `{{.Body}}`, and `{{.BodyStripped}}` placeholders.
 - **Sessions**: messages are tracked per chat with idle expiry, `/new` resets history, and `maxMessages` bounds the stored context before persisting it to disk.
+- **Working directory**: `inbound.reply.cwd` (optional) runs all Codex commands, including heartbeats, from a specific directory; omit it to use `cma`'s current directory.
 - **Session store**: conversations are serialized to `sessionStorePath` after each change (defaults to `~/.cma/sessions.json`), so `start`, `heartbeat`, and `status` share the same context.
 - **Heartbeats**: set `inbound.heartbeatMinutes` to `0` to disable; heartbeat prompts follow the `HEARTBEAT TELEGRAM` convention and suppress `HEARTBEAT_OK`.
 - **Logging**: `logging.level` supports `silent|error|warn|info|debug`; `logging.file` controls the log destination (default `/tmp/cma.log`).

@@ -1,8 +1,10 @@
 package codex
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"call-my-agent/pkg/model"
 )
@@ -24,5 +26,32 @@ func TestPrepareTemplateData(t *testing.T) {
 	}
 	if data.ChatID != "123" || data.Task != "task" {
 		t.Fatalf("unexpected data fields %+v", data)
+	}
+}
+
+func TestExecClientRunUsesWorkingDir(t *testing.T) {
+	client := ExecClient{
+		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
+		WorkingDir:      t.TempDir(),
+	}
+	ctx := context.Background()
+	output, err := client.Run(ctx, TemplateData{}, time.Second)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if output != client.WorkingDir {
+		t.Fatalf("expected output %q, got %q", client.WorkingDir, output)
+	}
+}
+
+func TestExecClientRunInvalidWorkingDir(t *testing.T) {
+	client := ExecClient{
+		CommandTemplate: []string{"/bin/echo", "hello"},
+		WorkingDir:      "/path/does/not/exist",
+	}
+	ctx := context.Background()
+	_, err := client.Run(ctx, TemplateData{}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "invalid cwd") {
+		t.Fatalf("expected invalid cwd error, got %v", err)
 	}
 }
