@@ -17,6 +17,7 @@ import (
 	"call-my-agent/pkg/model"
 	"call-my-agent/pkg/session"
 	"call-my-agent/pkg/store"
+	"call-my-agent/pkg/whisper"
 )
 
 const heartbeatSummaryLimit = 5
@@ -25,6 +26,10 @@ const heartbeatSummaryLimit = 5
 type MessageProvider interface {
 	Receive(ctx context.Context) (<-chan model.InboundMessage, <-chan error)
 	Send(ctx context.Context, chatID string, text string) error
+}
+
+type transcriber interface {
+	Transcribe(ctx context.Context, audio whisper.Audio) (string, error)
 }
 
 type logLevel int
@@ -39,14 +44,15 @@ const (
 
 // Service coordinates polling, Codex calls, and heartbeats.
 type Service struct {
-	cfg      config.Config
-	provider MessageProvider
-	ai       codex.AIClient
-	sessions *session.Manager
-	clock    session.Clock
-	logger   *log.Logger
-	store    store.SessionStore
-	logLevel logLevel
+	cfg         config.Config
+	provider    MessageProvider
+	ai          codex.AIClient
+	sessions    *session.Manager
+	clock       session.Clock
+	logger      *log.Logger
+	store       store.SessionStore
+	logLevel    logLevel
+	transcriber transcriber
 }
 
 // New creates a service instance.
@@ -147,12 +153,25 @@ func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) e
 	if !model.AllowedChat(msg.ChatID, s.cfg.Inbound.AllowFrom) {
 		return nil
 	}
-	sess, reset := s.sessions.Get(msg.ChatID, msg.Text)
+	body := msg.Text
+	if body == "" && msg.Audio != nil {
+		transcribed, err := s.transcribeAudio(ctx, msg.Audio)
+		if err != nil {
+			s.logf(levelError, "transcribe audio: %v", err)
+			return s.provider.Send(ctx, msg.ChatID, "Sorry, I couldn't transcribe that voice message.")
+		}
+		body = transcribed
+	}
+	if body == "" {
+		return nil
+	}
+
+	sess, reset := s.sessions.Get(msg.ChatID, body)
 	if reset {
 		s.saveSessions()
 	}
-	task := codex.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, msg.Text)
-	s.sessions.Append(sess, "user", msg.Text)
+	task := codex.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, body)
+	s.sessions.Append(sess, "user", body)
 	s.saveSessions()
 
 	var reply string
@@ -160,7 +179,7 @@ func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) e
 	case "static":
 		reply = s.cfg.Inbound.Reply.StaticText
 	case "command":
-		data := codex.PrepareTemplateData(msg.ChatID, msg.Text, task)
+		data := codex.PrepareTemplateData(msg.ChatID, body, task)
 		var err error
 		reply, err = s.ai.Run(ctx, data, s.cfg.Timeout())
 		if err != nil {
@@ -173,6 +192,17 @@ func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) e
 	s.sessions.Append(sess, "assistant", reply)
 	s.saveSessions()
 	return s.provider.Send(ctx, msg.ChatID, reply)
+}
+
+func (s *Service) transcribeAudio(ctx context.Context, audio *model.Audio) (string, error) {
+	if s.transcriber == nil {
+		client, err := whisper.NewClientFromEnv()
+		if err != nil {
+			return "", err
+		}
+		s.transcriber = client
+	}
+	return s.transcriber.Transcribe(ctx, whisper.Audio{Data: audio.Data, FileName: audio.FileName, MimeType: audio.MimeType})
 }
 
 func (s *Service) startHeartbeatScheduler(ctx context.Context, done chan struct{}) {

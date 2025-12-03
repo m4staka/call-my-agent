@@ -8,6 +8,15 @@ type InboundMessage struct {
 	MessageID int64
 	Text      string
 	Timestamp time.Time
+	Audio     *Audio
+}
+
+// Audio contains metadata and content for a received audio clip.
+type Audio struct {
+	FileID   string
+	FileName string
+	MimeType string
+	Data     []byte
 }
 
 // Message represents a conversation turn stored in a session.
