@@ -5,6 +5,7 @@ A small Go CLI that polls a Telegram bot, forwards allowed chats to the Codex CL
 ## Requirements
 - Go 1.22+
 - Telegram bot token supplied via the `TELEGRAM_BOT_TOKEN` environment variable (not required for `status`)
+- OpenAI API key supplied via the `OPENAI_API_KEY` environment variable for voice transcription
 - `codex` CLI installed and logged in (required when using command mode replies)
   - Install: follow the [codex documentation](https://github.com/codex-ai/codex) for installation instructions
   - Login: run `codex login` to authenticate before running `cma` commands
@@ -65,6 +66,10 @@ TELEGRAM_BOT_TOKEN=xxx ./cma heartbeat -config path/to/config.json
 ```
 
 `start` runs the polling loop, `heartbeat` runs a single heartbeat pass, and `status` prints session summaries.
+
+### Voice messages
+- Telegram voice and audio messages are downloaded via `getFile` and sent to the OpenAI Whisper API for transcription.
+- The transcribed text is processed like any other inbound message; on failure, the bot replies with an apology.
 
 ## Development
 - Format: `make fmt`

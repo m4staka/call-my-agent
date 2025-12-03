@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"call-my-agent/pkg/codex"
 	"call-my-agent/pkg/config"
 	"call-my-agent/pkg/model"
+	"call-my-agent/pkg/whisper"
 )
 
 type fakeProvider struct{ sent []model.InboundMessage }
@@ -43,6 +45,20 @@ func (f *fakeAI) Run(ctx context.Context, data codex.TemplateData, timeout time.
 type fixedClock struct{ now time.Time }
 
 func (f fixedClock) Now() time.Time { return f.now }
+
+type fakeTranscriber struct {
+	text  string
+	err   error
+	calls int
+}
+
+func (f *fakeTranscriber) Transcribe(ctx context.Context, audio whisper.Audio) (string, error) {
+	f.calls++
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.text, nil
+}
 
 func TestHandleMessageCommandMode(t *testing.T) {
 	cfg := config.Config{
@@ -107,5 +123,58 @@ func TestHeartbeatSuppression(t *testing.T) {
 	sessions := srv.sessions.Snapshot()
 	if len(sessions) != 1 || len(sessions[0].Messages) != 3 {
 		t.Fatalf("expected heartbeat messages recorded, got %+v", sessions)
+	}
+}
+
+func TestHandleMessageTranscribesAudio(t *testing.T) {
+	cfg := config.Config{
+		Inbound: config.InboundConfig{
+			AllowFrom: []string{"123"},
+			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Command: []string{"cmd", "{{.Task}}"}, Session: config.SessionConfig{IdleMinutes: 60}},
+		},
+	}
+	provider := &fakeProvider{}
+	ai := &fakeAI{responses: []string{"reply"}}
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	transcriber := &fakeTranscriber{text: "hello"}
+	srv.transcriber = transcriber
+
+	msg := model.InboundMessage{ChatID: "123", Audio: &model.Audio{Data: []byte("voice"), FileName: "clip.ogg", MimeType: "audio/ogg"}}
+	if err := srv.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage returned error: %v", err)
+	}
+	if transcriber.calls != 1 {
+		t.Fatalf("expected one transcription call, got %d", transcriber.calls)
+	}
+	if len(provider.sent) != 1 || provider.sent[0].Text != "reply" {
+		t.Fatalf("expected provider to send reply, got %+v", provider.sent)
+	}
+	if len(srv.sessions.Snapshot()) != 1 {
+		t.Fatalf("expected session to be created")
+	}
+}
+
+func TestHandleMessageTranscribeError(t *testing.T) {
+	cfg := config.Config{Inbound: config.InboundConfig{AllowFrom: []string{"123"}, Reply: config.ReplyConfig{Mode: "static", StaticText: "n/a", Session: config.SessionConfig{IdleMinutes: 60}}}}
+	provider := &fakeProvider{}
+	ai := &fakeAI{responses: []string{"unused"}}
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	srv.transcriber = &fakeTranscriber{err: fmt.Errorf("boom")}
+	msg := model.InboundMessage{ChatID: "123", Audio: &model.Audio{Data: []byte("voice"), FileName: "clip.ogg"}}
+
+	if err := srv.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage returned error: %v", err)
+	}
+	if len(provider.sent) != 1 || provider.sent[0].Text == "" {
+		t.Fatalf("expected apology message, got %+v", provider.sent)
+	}
+	if len(srv.sessions.Snapshot()) != 0 {
+		t.Fatalf("expected no session to be stored on transcription failure")
 	}
 }
