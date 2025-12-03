@@ -98,7 +98,7 @@ func buildServiceWithOptions(cfgPath string, requireToken bool) (config.Config, 
 		provider = telegram.NewProvider(token, cfg.PollInterval())
 	}
 
-	ai := codex.ExecClient{
+	ai := &codex.ExecClient{
 		CommandTemplate: cfg.Inbound.Reply.Command,
 		WorkingDir:      cfg.Inbound.Reply.Cwd,
 	}
