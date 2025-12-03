@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path"
 	"time"
 
 	"call-my-agent/pkg/model"
@@ -55,15 +57,18 @@ func (p *Provider) Receive(ctx context.Context) (<-chan model.InboundMessage, <-
 				}
 				for _, upd := range updates {
 					offset = upd.UpdateID + 1
-					if upd.Message == nil || upd.Message.Text == "" {
+					if upd.Message == nil {
 						continue
 					}
-					msgCh <- model.InboundMessage{
-						ChatID:    fmt.Sprintf("%d", upd.Message.Chat.ID),
-						MessageID: upd.Message.MessageID,
-						Text:      upd.Message.Text,
-						Timestamp: time.Unix(upd.Message.Date, 0),
+					msg, err := p.toInboundMessage(ctx, upd.Message)
+					if err != nil {
+						errCh <- err
+						continue
 					}
+					if msg == nil {
+						continue
+					}
+					msgCh <- *msg
 				}
 			}
 		}
@@ -123,6 +128,100 @@ func (p *Provider) getUpdates(ctx context.Context, offset int64) ([]update, erro
 	return response.Result, nil
 }
 
+func (p *Provider) toInboundMessage(ctx context.Context, msg *message) (*model.InboundMessage, error) {
+	if msg == nil {
+		return nil, nil
+	}
+	base := &model.InboundMessage{
+		ChatID:    fmt.Sprintf("%d", msg.Chat.ID),
+		MessageID: msg.MessageID,
+		Text:      msg.Text,
+		Timestamp: time.Unix(msg.Date, 0),
+	}
+	if msg.Text != "" {
+		return base, nil
+	}
+
+	if msg.Voice != nil {
+		audio, err := p.fetchAudio(ctx, msg.Voice.FileID, msg.Voice.MimeType, "")
+		if err != nil {
+			return nil, err
+		}
+		base.Audio = audio
+		return base, nil
+	}
+
+	if msg.Audio != nil {
+		audio, err := p.fetchAudio(ctx, msg.Audio.FileID, msg.Audio.MimeType, msg.Audio.FileName)
+		if err != nil {
+			return nil, err
+		}
+		base.Audio = audio
+		return base, nil
+	}
+
+	return nil, nil
+}
+
+func (p *Provider) fetchAudio(ctx context.Context, fileID, mimeType, providedName string) (*model.Audio, error) {
+	fileInfo, err := p.getFile(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	name := providedName
+	if name == "" {
+		name = path.Base(fileInfo.FilePath)
+	}
+	content, err := p.downloadFile(ctx, fileInfo.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	return &model.Audio{FileID: fileID, FileName: name, MimeType: mimeType, Data: content}, nil
+}
+
+func (p *Provider) getFile(ctx context.Context, fileID string) (fileResult, error) {
+	payload := map[string]interface{}{"file_id": fileID}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL("getFile"), bytes.NewReader(body))
+	if err != nil {
+		return fileResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return fileResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fileResult{}, fmt.Errorf("getFile status %s", resp.Status)
+	}
+	var response fileResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return fileResult{}, err
+	}
+	if !response.OK {
+		return fileResult{}, fmt.Errorf("telegram error: %v", response.Description)
+	}
+	return response.Result, nil
+}
+
+func (p *Provider) downloadFile(ctx context.Context, filePath string) ([]byte, error) {
+	url := fmt.Sprintf("%s/file/bot%s/%s", p.baseURL, p.Token, filePath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download file status %s", resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 func (p *Provider) apiURL(method string) string {
 	return fmt.Sprintf("%s/bot%s/%s", p.baseURL, p.Token, method)
 }
@@ -151,6 +250,8 @@ type message struct {
 	Chat      chat   `json:"chat"`
 	Date      int64  `json:"date"`
 	Text      string `json:"text"`
+	Voice     *voice `json:"voice"`
+	Audio     *audio `json:"audio"`
 }
 
 type user struct {
@@ -159,4 +260,25 @@ type user struct {
 
 type chat struct {
 	ID int64 `json:"id"`
+}
+
+type voice struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type"`
+}
+
+type audio struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+}
+
+type fileResponse struct {
+	OK          bool       `json:"ok"`
+	Result      fileResult `json:"result"`
+	Description string     `json:"description"`
+}
+
+type fileResult struct {
+	FilePath string `json:"file_path"`
 }

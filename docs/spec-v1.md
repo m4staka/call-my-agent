@@ -30,17 +30,17 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
   - `scope: "per-chat"`, `idleMinutes`, `/new` resets (similar to warelay’s sessions). 3  
 - **Heartbeat** loop:
   - Global `heartbeatMinutes` scheduler.
-  - Heartbeat prompt convention with response suppression when Codex returns `HEARTBEAT_OK`, modeled on warelay’s heartbeat behavior. 4  
+  - Heartbeat prompt convention with response suppression when Codex returns `HEARTBEAT_OK`, modeled on warelay’s heartbeat behavior. 4
 - Basic **access control** (`allowFrom` chat IDs).
-- Basic **logging** and a `status` command similar in spirit to `warelay status`. 5  
+- Basic **logging** and a `status` command similar in spirit to `warelay status`. 5
+- **Voice transcription** for Telegram `voice` and `audio` messages using the OpenAI Whisper API (audio fetched via `getFile`).
 
 ### 2.2 Non-Goals (explicitly out of scope for v1)
 
 - **No WhatsApp/Twilio** support.
 - **No webhooks** (Telegram `setWebhook`) – polling only.
-- **No media support**:
-  - Text-only messages in v1 (no photos, files, stickers).
-- **No voice/Audio transcription** integration (warelay’s OpenAI Whisper example is *not* ported in v1). 6  
+- **No rich media beyond audio**:
+  - Voice/audio are supported; photos, documents, and stickers remain out of scope.
 - **No group chat logic** (no threads in groups, no multi-user routing).
 - **No Codex SDK, Agents SDK, or MCP**:
   - v1 only shells out to `codex` CLI; no TypeScript SDK or MCP server usage. 7  
