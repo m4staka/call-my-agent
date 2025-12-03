@@ -74,6 +74,18 @@ func New(cfg config.Config, provider MessageProvider, ai codex.AIClient, clock s
 		logLevel: level,
 	}
 
+	if client, ok := ai.(*codex.ExecClient); ok {
+		client.Logger = codex.LoggerFuncs{
+			Debug: func(format string, args ...interface{}) {
+				srv.logf(levelDebug, format, args...)
+			},
+			Warn: func(format string, args ...interface{}) {
+				srv.logf(levelWarn, format, args...)
+			},
+		}
+		srv.ai = client
+	}
+
 	if sessionStore != nil {
 		loaded, err := sessionStore.Load()
 		if err != nil {
