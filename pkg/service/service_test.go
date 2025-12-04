@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,9 +32,11 @@ func (p *fakeProvider) Send(ctx context.Context, chatID string, text string) err
 type fakeAI struct {
 	responses []string
 	idx       int
+	calls     []codex.TemplateData
 }
 
 func (f *fakeAI) Run(ctx context.Context, data codex.TemplateData, timeout time.Duration) (string, error) {
+	f.calls = append(f.calls, data)
 	if f.idx >= len(f.responses) {
 		return "", nil
 	}
@@ -83,6 +86,34 @@ func TestHandleMessageCommandMode(t *testing.T) {
 	sessions := srv.sessions.Snapshot()
 	if len(sessions) != 1 || len(sessions[0].Messages) != 2 {
 		t.Fatalf("expected session messages recorded, got %+v", sessions)
+	}
+}
+
+func TestHandleMessageSuppressesHeartbeatOK(t *testing.T) {
+	cfg := config.Config{
+		Inbound: config.InboundConfig{
+			AllowFrom: []string{"123"},
+			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Command: []string{"cmd", "{{.Task}}"}, Session: config.SessionConfig{IdleMinutes: 60}},
+		},
+	}
+	provider := &fakeProvider{}
+	ai := &fakeAI{responses: []string{"HEARTBEAT_OK"}}
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := srv.handleMessage(context.Background(), model.InboundMessage{ChatID: "123", Text: "hi"}); err != nil {
+		t.Fatalf("handleMessage returned error: %v", err)
+	}
+
+	if len(provider.sent) != 0 {
+		t.Fatalf("expected no messages for HEARTBEAT_OK, got %d", len(provider.sent))
+	}
+
+	sessions := srv.sessions.Snapshot()
+	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
+		t.Fatalf("expected only user message recorded, got %+v", sessions)
 	}
 }
 
@@ -176,5 +207,100 @@ func TestHandleMessageTranscribeError(t *testing.T) {
 	}
 	if len(srv.sessions.Snapshot()) != 0 {
 		t.Fatalf("expected no session to be stored on transcription failure")
+	}
+}
+
+type queueProvider struct {
+	messages []model.InboundMessage
+	sent     []sentMsg
+}
+
+func (p *queueProvider) Receive(ctx context.Context) (<-chan model.InboundMessage, <-chan error) {
+	msgCh := make(chan model.InboundMessage)
+	errCh := make(chan error)
+	go func() {
+		defer close(msgCh)
+		defer close(errCh)
+		for _, m := range p.messages {
+			select {
+			case <-ctx.Done():
+				return
+			case msgCh <- m:
+			}
+		}
+	}()
+	return msgCh, errCh
+}
+
+func (p *queueProvider) Send(ctx context.Context, chatID string, text string) error {
+	p.sent = append(p.sent, sentMsg{chatID: chatID, text: text})
+	return nil
+}
+
+func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
+	cfg := config.Config{
+		Inbound: config.InboundConfig{
+			AllowFrom: []string{"123"},
+			Reply: config.ReplyConfig{
+				Mode: "command",
+				Session: config.SessionConfig{
+					IdleMinutes: 60,
+				},
+			},
+		},
+		Logging: config.LoggingConfig{Level: "silent"},
+	}
+
+	provider := &queueProvider{
+		messages: []model.InboundMessage{
+			{ChatID: "123", Text: "first"},
+			{ChatID: "123", Text: "second"},
+			{ChatID: "123", Text: "third"},
+		},
+	}
+	ai := &fakeAI{responses: []string{"r1", "r2"}}
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Start(ctx)
+	}()
+
+	// Wait for the queued messages to be processed.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(ai.calls) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("service start returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("service did not shut down after context cancellation")
+	}
+
+	// We expect two Codex invocations: one for the first message, and one
+	// batching the second and third messages together.
+	if len(ai.calls) != 2 {
+		t.Fatalf("expected 2 Codex calls, got %d", len(ai.calls))
+	}
+	if !strings.Contains(ai.calls[0].Body, "first") {
+		t.Fatalf("first call body missing 'first': %q", ai.calls[0].Body)
+	}
+	if !strings.Contains(ai.calls[1].Body, "second") || !strings.Contains(ai.calls[1].Body, "third") {
+		t.Fatalf("second call body should contain batched messages, got %q", ai.calls[1].Body)
 	}
 }

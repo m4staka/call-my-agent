@@ -2,7 +2,6 @@ package codex
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,11 +47,9 @@ func TestExecClientRunUsesWorkingDir(t *testing.T) {
 }
 
 func TestExecClientRunInvalidWorkingDir(t *testing.T) {
-	logger := &stubLogger{}
 	client := ExecClient{
 		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
 		WorkingDir:      "/path/does/not/exist",
-		Logger:          logger,
 	}
 	ctx := context.Background()
 	output, err := client.Run(ctx, TemplateData{}, time.Second)
@@ -62,9 +59,6 @@ func TestExecClientRunInvalidWorkingDir(t *testing.T) {
 	cwd, _ := os.Getwd()
 	if output != cwd {
 		t.Fatalf("expected fallback to process cwd %q, got %q", cwd, output)
-	}
-	if !logger.warnCalled || !strings.Contains(logger.lastWarn, "not usable") {
-		t.Fatalf("expected warning about unusable cwd, got %q", logger.lastWarn)
 	}
 }
 
@@ -83,11 +77,9 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	logger := &stubLogger{}
 	client := ExecClient{
 		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
 		WorkingDir:      "project",
-		Logger:          logger,
 	}
 
 	ctx := context.Background()
@@ -97,9 +89,6 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 	}
 	if output != nested {
 		t.Fatalf("expected resolved cwd %q, got %q", nested, output)
-	}
-	if !logger.debugCalled || !strings.Contains(logger.lastDebug, nested) {
-		t.Fatalf("expected debug log with resolved path, got %q", logger.lastDebug)
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -118,21 +107,4 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 	if output != cleanedHome {
 		t.Fatalf("expected home directory %q, got %q", cleanedHome, output)
 	}
-}
-
-type stubLogger struct {
-	debugCalled bool
-	warnCalled  bool
-	lastDebug   string
-	lastWarn    string
-}
-
-func (s *stubLogger) Debugf(format string, args ...interface{}) {
-	s.debugCalled = true
-	s.lastDebug = fmt.Sprintf(format, args...)
-}
-
-func (s *stubLogger) Warnf(format string, args ...interface{}) {
-	s.warnCalled = true
-	s.lastWarn = fmt.Sprintf(format, args...)
 }

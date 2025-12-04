@@ -46,29 +46,45 @@ func (p *Provider) Receive(ctx context.Context) (<-chan model.InboundMessage, <-
 		defer close(errCh)
 		offset := int64(0)
 		for {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil {
 				return
-			case <-time.After(p.PollInterval):
-				updates, err := p.getUpdates(ctx, offset)
-				if err != nil {
-					errCh <- err
+			}
+			updates, err := p.getUpdates(ctx, offset)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				case errCh <- err:
+				}
+				// Avoid hammering Telegram on persistent failures by sleeping for the poll interval.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(p.PollInterval):
+				}
+				continue
+			}
+			for _, upd := range updates {
+				offset = upd.UpdateID + 1
+				if upd.Message == nil {
 					continue
 				}
-				for _, upd := range updates {
-					offset = upd.UpdateID + 1
-					if upd.Message == nil {
-						continue
+				msg, err := p.toInboundMessage(ctx, upd.Message)
+				if err != nil {
+					select {
+					case <-ctx.Done():
+						return
+					case errCh <- err:
 					}
-					msg, err := p.toInboundMessage(ctx, upd.Message)
-					if err != nil {
-						errCh <- err
-						continue
-					}
-					if msg == nil {
-						continue
-					}
-					msgCh <- *msg
+					continue
+				}
+				if msg == nil {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case msgCh <- *msg:
 				}
 			}
 		}
