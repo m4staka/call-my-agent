@@ -23,33 +23,6 @@ type AIClient interface {
 type ExecClient struct {
 	CommandTemplate []string
 	WorkingDir      string
-	Logger          Logger
-}
-
-// Logger provides leveled logging for Codex execution.
-type Logger interface {
-	Debugf(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
-}
-
-// LoggerFuncs adapts simple functions to the Logger interface.
-type LoggerFuncs struct {
-	Debug func(format string, args ...interface{})
-	Warn  func(format string, args ...interface{})
-}
-
-// Debugf logs a debug message if configured.
-func (l LoggerFuncs) Debugf(format string, args ...interface{}) {
-	if l.Debug != nil {
-		l.Debug(format, args...)
-	}
-}
-
-// Warnf logs a warning message if configured.
-func (l LoggerFuncs) Warnf(format string, args ...interface{}) {
-	if l.Warn != nil {
-		l.Warn(format, args...)
-	}
 }
 
 // TemplateData defines templated fields for commands.
@@ -90,10 +63,8 @@ func (c ExecClient) resolveWorkingDir() string {
 	}
 	resolved, err := resolvePath(c.WorkingDir)
 	if err != nil {
-		c.logWarn("Configured cwd %q not usable (%v), falling back to process working directory", c.WorkingDir, err)
 		return ""
 	}
-	c.logDebug("Launching Codex with cwd=%s", resolved)
 	return resolved
 }
 
@@ -174,18 +145,4 @@ func resolvePath(path string) (string, error) {
 		return "", fmt.Errorf("not a directory")
 	}
 	return path, nil
-}
-
-func (c ExecClient) logDebug(format string, args ...interface{}) {
-	if c.Logger == nil {
-		return
-	}
-	c.Logger.Debugf(format, args...)
-}
-
-func (c ExecClient) logWarn(format string, args ...interface{}) {
-	if c.Logger == nil {
-		return
-	}
-	c.Logger.Warnf(format, args...)
 }

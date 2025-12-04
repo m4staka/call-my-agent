@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"call-my-agent/pkg/codex"
@@ -53,6 +54,19 @@ type Service struct {
 	store       store.SessionStore
 	logLevel    logLevel
 	transcriber transcriber
+	// transcriberMu protects lazy initialization of the transcriber client.
+	transcriberMu sync.Mutex
+
+	// commandQueues coordinates Codex command-mode calls per chat so that
+	// multiple inbound messages received while a command is running are
+	// batched into the next Codex run.
+	commandQueuesMu sync.Mutex
+	commandQueues   map[string]*commandQueue
+}
+
+type commandQueue struct {
+	pending []string
+	running bool
 }
 
 // New creates a service instance.
@@ -70,26 +84,15 @@ func New(cfg config.Config, provider MessageProvider, ai codex.AIClient, clock s
 	}
 
 	srv := &Service{
-		cfg:      cfg,
-		provider: provider,
-		ai:       ai,
-		sessions: session.NewManager(cfg.Inbound.Reply.Session.IdleMinutes, cfg.Inbound.Reply.Session.ResetTriggers, cfg.Inbound.Reply.Session.MaxMessages, clock),
-		clock:    clock,
-		logger:   log.New(writer, "cma ", log.LstdFlags),
-		store:    sessionStore,
-		logLevel: level,
-	}
-
-	if client, ok := ai.(*codex.ExecClient); ok {
-		client.Logger = codex.LoggerFuncs{
-			Debug: func(format string, args ...interface{}) {
-				srv.logf(levelDebug, format, args...)
-			},
-			Warn: func(format string, args ...interface{}) {
-				srv.logf(levelWarn, format, args...)
-			},
-		}
-		srv.ai = client
+		cfg:           cfg,
+		provider:      provider,
+		ai:            ai,
+		sessions:      session.NewManager(cfg.Inbound.Reply.Session.IdleMinutes, cfg.Inbound.Reply.Session.ResetTriggers, cfg.Inbound.Reply.Session.MaxMessages, clock),
+		clock:         clock,
+		logger:        log.New(writer, "cma ", log.LstdFlags),
+		store:         sessionStore,
+		logLevel:      level,
+		commandQueues: make(map[string]*commandQueue),
 	}
 
 	if sessionStore != nil {
@@ -138,9 +141,7 @@ func (s *Service) Start(ctx context.Context) error {
 				continue
 			}
 			s.logf(levelInfo, "received message chat=%s text=%q", msg.ChatID, msg.Text)
-			if err := s.handleMessage(ctx, msg); err != nil {
-				s.logf(levelError, "handle message: %v", err)
-			}
+			s.dispatchMessage(ctx, msg)
 		}
 		if msgCh == nil && errCh == nil {
 			<-heartbeatDone
@@ -150,23 +151,81 @@ func (s *Service) Start(ctx context.Context) error {
 }
 
 func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) error {
+	body, err := s.normalizeMessage(ctx, msg)
+	if err != nil || body == "" {
+		return err
+	}
+	return s.processBatch(ctx, msg.ChatID, body)
+}
+
+func (s *Service) transcribeAudio(ctx context.Context, audio *model.Audio) (string, error) {
+	s.transcriberMu.Lock()
+	if s.transcriber == nil {
+		client, err := whisper.NewClientFromEnv()
+		if err != nil {
+			s.transcriberMu.Unlock()
+			return "", err
+		}
+		s.transcriber = client
+	}
+	tr := s.transcriber
+	s.transcriberMu.Unlock()
+
+	start := time.Now()
+	text, err := tr.Transcribe(ctx, whisper.Audio{
+		Data:     audio.Data,
+		FileName: audio.FileName,
+		MimeType: audio.MimeType,
+	})
+	elapsed := time.Since(start)
+	s.logf(levelInfo, "audio transcription completed in %s", elapsed)
+	return text, err
+}
+
+// dispatchMessage routes inbound messages either through the existing
+// synchronous handler (for static mode) or through the per-chat command
+// queues (for command mode) so that Codex calls can be batched.
+func (s *Service) dispatchMessage(ctx context.Context, msg model.InboundMessage) {
+	switch strings.ToLower(s.cfg.Inbound.Reply.Mode) {
+	case "command":
+		if err := s.enqueueCommandMessage(ctx, msg); err != nil {
+			s.logf(levelError, "enqueue command message: %v", err)
+		}
+	default:
+		if err := s.handleMessage(ctx, msg); err != nil {
+			s.logf(levelError, "handle message: %v", err)
+		}
+	}
+}
+
+// normalizeMessage enforces access control and resolves the text body,
+// including optional audio transcription. It returns an empty body when
+// the message should be ignored.
+func (s *Service) normalizeMessage(ctx context.Context, msg model.InboundMessage) (string, error) {
 	if !model.AllowedChat(msg.ChatID, s.cfg.Inbound.AllowFrom) {
-		return nil
+		return "", nil
 	}
 	body := msg.Text
 	if body == "" && msg.Audio != nil {
 		transcribed, err := s.transcribeAudio(ctx, msg.Audio)
 		if err != nil {
 			s.logf(levelError, "transcribe audio: %v", err)
-			return s.provider.Send(ctx, msg.ChatID, "Sorry, I couldn't transcribe that voice message.")
+			// Best-effort apology; ignore send errors to match previous behaviour.
+			_ = s.provider.Send(ctx, msg.ChatID, "Sorry, I couldn't transcribe that voice message.")
+			return "", nil
 		}
 		body = transcribed
 	}
 	if body == "" {
-		return nil
+		return "", nil
 	}
+	return body, nil
+}
 
-	sess, reset := s.sessions.Get(msg.ChatID, body)
+// processBatch executes the core reply logic for a single (possibly
+// aggregated) user body.
+func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
+	sess, reset := s.sessions.Get(chatID, body)
 	if reset {
 		s.saveSessions()
 	}
@@ -179,7 +238,7 @@ func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) e
 	case "static":
 		reply = s.cfg.Inbound.Reply.StaticText
 	case "command":
-		data := codex.PrepareTemplateData(msg.ChatID, body, task)
+		data := codex.PrepareTemplateData(chatID, body, task)
 		var err error
 		reply, err = s.ai.Run(ctx, data, s.cfg.Timeout())
 		if err != nil {
@@ -189,20 +248,81 @@ func (s *Service) handleMessage(ctx context.Context, msg model.InboundMessage) e
 		return fmt.Errorf("unsupported mode %q", s.cfg.Inbound.Reply.Mode)
 	}
 
+	// Suppress bare HEARTBEAT_OK replies so that accidental heartbeat-style
+	// outputs from Codex are not forwarded to Telegram chats.
+	if strings.TrimSpace(reply) == "HEARTBEAT_OK" {
+		s.logf(levelDebug, "suppressing HEARTBEAT_OK reply for chat=%s", chatID)
+		return nil
+	}
+
 	s.sessions.Append(sess, "assistant", reply)
 	s.saveSessions()
-	return s.provider.Send(ctx, msg.ChatID, reply)
+	return s.provider.Send(ctx, chatID, reply)
 }
 
-func (s *Service) transcribeAudio(ctx context.Context, audio *model.Audio) (string, error) {
-	if s.transcriber == nil {
-		client, err := whisper.NewClientFromEnv()
-		if err != nil {
-			return "", err
-		}
-		s.transcriber = client
+func (s *Service) enqueueCommandMessage(ctx context.Context, msg model.InboundMessage) error {
+	body, err := s.normalizeMessage(ctx, msg)
+	if err != nil || body == "" {
+		return err
 	}
-	return s.transcriber.Transcribe(ctx, whisper.Audio{Data: audio.Data, FileName: audio.FileName, MimeType: audio.MimeType})
+
+	s.commandQueuesMu.Lock()
+	q := s.commandQueues[msg.ChatID]
+	if q == nil {
+		q = &commandQueue{}
+		s.commandQueues[msg.ChatID] = q
+	}
+	if q.running {
+		q.pending = append(q.pending, body)
+		s.commandQueuesMu.Unlock()
+		return nil
+	}
+	// First message for this chat starts a new worker and is processed
+	// immediately; subsequent messages accumulate in the pending queue
+	// while Codex is running and will be batched on the next run.
+	q.running = true
+	s.commandQueuesMu.Unlock()
+
+	go s.processCommandQueue(ctx, msg.ChatID, body)
+	return nil
+}
+
+func (s *Service) processCommandQueue(ctx context.Context, chatID, firstBody string) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err := s.processBatch(ctx, chatID, firstBody); err != nil {
+		s.logf(levelError, "handle command batch chat=%s: %v", chatID, err)
+	}
+
+	for {
+		bodies := s.dequeuePending(chatID)
+		if len(bodies) == 0 || ctx.Err() != nil {
+			return
+		}
+		combined := strings.Join(bodies, "\n\n")
+		if err := s.processBatch(ctx, chatID, combined); err != nil {
+			s.logf(levelError, "handle command batch chat=%s: %v", chatID, err)
+		}
+	}
+}
+
+func (s *Service) dequeuePending(chatID string) []string {
+	s.commandQueuesMu.Lock()
+	defer s.commandQueuesMu.Unlock()
+
+	q := s.commandQueues[chatID]
+	if q == nil || len(q.pending) == 0 {
+		if q != nil {
+			q.running = false
+			// Remove idle queues to avoid unbounded growth for transient chats.
+			delete(s.commandQueues, chatID)
+		}
+		return nil
+	}
+	bodies := q.pending
+	q.pending = nil
+	return bodies
 }
 
 func (s *Service) startHeartbeatScheduler(ctx context.Context, done chan struct{}) {
@@ -232,6 +352,7 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 		idleLimit = time.Duration(s.cfg.Inbound.Reply.Session.IdleMinutes) * time.Minute
 	}
 	changed := false
+	var firstErr error
 	for _, sess := range s.sessions.Snapshot() {
 		if now.Sub(sess.UpdatedAt) > idleLimit {
 			continue
@@ -241,7 +362,11 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 		data := codex.PrepareTemplateData(sess.ChatID, heartbeatBody, task)
 		resp, err := s.ai.Run(ctx, data, s.cfg.Timeout())
 		if err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			s.logf(levelWarn, "heartbeat ai.Run chat=%s: %v", sess.ChatID, err)
+			continue
 		}
 		if strings.TrimSpace(resp) == "HEARTBEAT_OK" {
 			continue
@@ -253,7 +378,11 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 			changed = true
 		}
 		if err := s.provider.Send(ctx, sess.ChatID, resp); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			s.logf(levelWarn, "heartbeat send chat=%s: %v", sess.ChatID, err)
+			continue
 		}
 		changed = true
 	}
@@ -263,7 +392,7 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 	if changed {
 		s.saveSessions()
 	}
-	return nil
+	return firstErr
 }
 
 // StatusOptions controls status output.

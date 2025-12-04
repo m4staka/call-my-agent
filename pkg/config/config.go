@@ -93,6 +93,9 @@ func (c *Config) Validate() error {
 	if c.Inbound.HeartbeatMinutes < 0 {
 		return fmt.Errorf("heartbeatMinutes cannot be negative")
 	}
+	if len(c.Inbound.AllowFrom) == 0 {
+		return fmt.Errorf("inbound.allowFrom must not be empty (no chats would be processed)")
+	}
 	if len(c.Inbound.Reply.Command) == 0 && c.Inbound.Reply.Mode == "command" {
 		c.Inbound.Reply.Command = []string{"codex", "exec", "{{.Task}}"}
 	}
