@@ -21,7 +21,10 @@ import (
 	"call-my-agent/pkg/whisper"
 )
 
-const heartbeatSummaryLimit = 5
+const (
+	heartbeatSummaryLimit   = 5
+	logMessagePreviewLength = 80
+)
 
 // MessageProvider describes Telegram interactions.
 type MessageProvider interface {
@@ -140,7 +143,8 @@ func (s *Service) Start(ctx context.Context) error {
 				msgCh = nil
 				continue
 			}
-			s.logf(levelInfo, "received message chat=%s text=%q", msg.ChatID, msg.Text)
+			textStart := previewForLog(msg.Text)
+			s.logf(levelInfo, "received message chat=%s textStart=%q", msg.ChatID, textStart)
 			s.dispatchMessage(ctx, msg)
 		}
 		if msgCh == nil && errCh == nil {
@@ -463,6 +467,14 @@ func (s *Service) logf(level logLevel, format string, args ...interface{}) {
 	if level <= s.logLevel {
 		s.logger.Printf("[%s] %s", level.String(), fmt.Sprintf(format, args...))
 	}
+}
+
+func previewForLog(text string) string {
+	runes := []rune(text)
+	if len(runes) <= logMessagePreviewLength {
+		return text
+	}
+	return string(runes[:logMessagePreviewLength]) + "..."
 }
 
 func (l logLevel) String() string {

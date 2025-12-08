@@ -39,5 +39,3 @@ func TestValidateAcceptsNonEmptyAllowFrom(t *testing.T) {
 		t.Fatalf("expected nil error for non-empty inbound.allowFrom, got %v", err)
 	}
 }
-
-
