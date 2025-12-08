@@ -229,7 +229,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
 - **warelay concepts & config:**
   - README – “Main Features”, “Command Cheat Sheet”, “Auto-reply config (`~/.warelay/warelay.json`)”, “Heartbeat pings (command mode)”, and “Logging”. 24  
-  - `docs/clawd.md` – example of a proactive personal assistant setup built on warelay + Claude Code (design inspiration for proactive Codex agent). 25  
+  - `docs/arthur.md` – example of a proactive personal assistant setup built on warelay + Claude Code (design inspiration for proactive Codex agent). 25  
 
 - **Codex CLI usage:**
   - Codex CLI overview and features: docs “Codex CLI” (install, interactive usage, scripting). 26  
