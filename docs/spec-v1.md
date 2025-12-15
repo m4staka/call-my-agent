@@ -24,7 +24,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 - 1:1 **direct chats** (individual chat IDs), no groups/supergroups for v1.
 - Simple, configurable **auto-reply engine**:
   - `mode: "static"` (template reply) or `mode: "command"` (Codex CLI).
-  - Command templating with variables like `{{Body}}`, `{{BodyStripped}}`, `{{ChatId}}`.
+- Agent selection via `inbound.reply.agent` (e.g., `codex`, `pi`) to choose which tool handles replies.
 - **Codex CLI integration** in non-interactive mode using `codex exec "<task>"`, reading final result from `stdout`. 2  
 - Per-chat **sessions**:
   - `scope: "per-chat"`, `idleMinutes`, `/new` resets (similar to warelay’s sessions). 3  
@@ -76,7 +76,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
          mode: "command" | "static"
          staticText: "..."              # if mode == static
          bodyPrefix: "..."              # system prompt prefix
-         command: ["codex", "exec", "{{BodyStripped}}"]
+        agent: "codex"                 # Agentic tool: codex (default) or pi
          cwd: "/home/user/project"      # optional working dir for codex CLI
          timeoutSeconds: 600
 
@@ -117,7 +117,7 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
      - `bodyPrefix`,
      - session context (optional N last messages),
      - current user message (with `/new` stripped if needed).
-   - Run `codex exec "<task>"` as a subprocess.
+  - Run the selected CLI (`codex exec "<task>"` for Codex; `pi -p --no-session` for Pi) as a subprocess (agent comes from config).
      - Use the docs’ guarantee that progress goes to stderr and the **final agent message** goes to stdout. 14  
    - Respect `timeoutSeconds`.
    - Strip trailing whitespace; return the final string to the caller.

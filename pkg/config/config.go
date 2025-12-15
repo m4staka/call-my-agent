@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -33,7 +34,7 @@ type ReplyConfig struct {
 	Mode           string        `json:"mode"`
 	StaticText     string        `json:"staticText"`
 	BodyPrefix     string        `json:"bodyPrefix"`
-	Command        []string      `json:"command"`
+	Agent          string        `json:"agent"`
 	Cwd            string        `json:"cwd"`
 	TimeoutSeconds int           `json:"timeoutSeconds"`
 	Session        SessionConfig `json:"session"`
@@ -78,6 +79,14 @@ func (c *Config) Validate() error {
 	if c.Inbound.Reply.TimeoutSeconds <= 0 {
 		c.Inbound.Reply.TimeoutSeconds = 600
 	}
+	if c.Inbound.Reply.Agent == "" {
+		c.Inbound.Reply.Agent = "codex"
+	}
+	switch strings.ToLower(c.Inbound.Reply.Agent) {
+	case "codex", "pi":
+	default:
+		return fmt.Errorf("unknown inbound.reply.agent %q", c.Inbound.Reply.Agent)
+	}
 	if c.Inbound.Reply.Session.IdleMinutes <= 0 {
 		c.Inbound.Reply.Session.IdleMinutes = 60
 	}
@@ -96,9 +105,6 @@ func (c *Config) Validate() error {
 	if len(c.Inbound.AllowFrom) == 0 {
 		return fmt.Errorf("inbound.allowFrom must not be empty (no chats would be processed)")
 	}
-	if len(c.Inbound.Reply.Command) == 0 && c.Inbound.Reply.Mode == "command" {
-		c.Inbound.Reply.Command = []string{"codex", "exec", "{{.Task}}"}
-	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
@@ -108,10 +114,24 @@ func (c *Config) Validate() error {
 	if c.SessionStorePath == "" {
 		c.SessionStorePath = defaultSessionStorePath()
 	}
+	if c.Logging.File != "" && c.Logging.File != "-" {
+		resolved, err := resolveFilePath(c.Logging.File)
+		if err != nil {
+			return fmt.Errorf("resolve logging.file: %w", err)
+		}
+		c.Logging.File = resolved
+	}
+	if c.SessionStorePath != "" {
+		resolved, err := resolveFilePath(c.SessionStorePath)
+		if err != nil {
+			return fmt.Errorf("resolve sessionStorePath: %w", err)
+		}
+		c.SessionStorePath = resolved
+	}
 	return nil
 }
 
-// Timeout returns the configured command timeout.
+// Timeout returns the configured execution timeout.
 func (c Config) Timeout() time.Duration {
 	return time.Duration(c.Inbound.Reply.TimeoutSeconds) * time.Second
 }
@@ -119,6 +139,24 @@ func (c Config) Timeout() time.Duration {
 // PollInterval returns the polling interval as a duration.
 func (c Config) PollInterval() time.Duration {
 	return time.Duration(c.Telegram.PollIntervalSeconds) * time.Second
+}
+
+func resolveFilePath(path string) (string, error) {
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand home: %w", err)
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+	}
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("get working directory: %w", err)
+		}
+		path = filepath.Join(wd, path)
+	}
+	return filepath.Clean(path), nil
 }
 
 func defaultSessionStorePath() string {

@@ -4,40 +4,37 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"call-my-agent/pkg/model"
+	"call-my-agent/pkg/agent"
 )
 
-func TestBuildTaskIncludesPrefixAndHistory(t *testing.T) {
-	sess := &model.Session{
-		Messages: []model.Message{{Role: "assistant", Content: "Hi"}},
+func TestBuildExecCommand(t *testing.T) {
+	args, err := buildExecCommand(agent.Request{Task: "do thing"})
+	if err != nil {
+		t.Fatalf("buildExecCommand returned error: %v", err)
 	}
-	task := BuildTask("system prefix", sess, "new question")
-	if !strings.Contains(task, "system prefix") || !strings.Contains(task, "Assistant: Hi") || !strings.Contains(task, "User: new question") {
-		t.Fatalf("unexpected task content: %s", task)
+	want := []string{"codex", "exec", "do thing"}
+	if len(args) != len(want) {
+		t.Fatalf("expected args %v, got %v", want, args)
 	}
-}
-
-func TestPrepareTemplateData(t *testing.T) {
-	data := PrepareTemplateData("123", "  body  ", "task")
-	if data.BodyStripped != "body" {
-		t.Fatalf("expected stripped body, got %q", data.BodyStripped)
-	}
-	if data.ChatID != "123" || data.Task != "task" {
-		t.Fatalf("unexpected data fields %+v", data)
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("expected args %v, got %v", want, args)
+		}
 	}
 }
 
 func TestExecClientRunUsesWorkingDir(t *testing.T) {
 	client := ExecClient{
-		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
-		WorkingDir:      t.TempDir(),
+		WorkingDir: t.TempDir(),
+		commandBuilder: func(req agent.Request) ([]string, error) {
+			return []string{"/bin/sh", "-c", "pwd"}, nil
+		},
 	}
 	ctx := context.Background()
-	output, err := client.Run(ctx, TemplateData{}, time.Second)
+	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -48,11 +45,13 @@ func TestExecClientRunUsesWorkingDir(t *testing.T) {
 
 func TestExecClientRunInvalidWorkingDir(t *testing.T) {
 	client := ExecClient{
-		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
-		WorkingDir:      "/path/does/not/exist",
+		WorkingDir: "/path/does/not/exist",
+		commandBuilder: func(req agent.Request) ([]string, error) {
+			return []string{"/bin/sh", "-c", "pwd"}, nil
+		},
 	}
 	ctx := context.Background()
-	output, err := client.Run(ctx, TemplateData{}, time.Second)
+	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -78,12 +77,14 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 	}
 
 	client := ExecClient{
-		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
-		WorkingDir:      "project",
+		WorkingDir: "project",
+		commandBuilder: func(req agent.Request) ([]string, error) {
+			return []string{"/bin/sh", "-c", "pwd"}, nil
+		},
 	}
 
 	ctx := context.Background()
-	output, err := client.Run(ctx, TemplateData{}, time.Second)
+	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -96,10 +97,12 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 		t.Skip("cannot resolve home dir")
 	}
 	homeClient := ExecClient{
-		CommandTemplate: []string{"/bin/sh", "-c", "pwd"},
-		WorkingDir:      "~",
+		WorkingDir: "~",
+		commandBuilder: func(req agent.Request) ([]string, error) {
+			return []string{"/bin/sh", "-c", "pwd"}, nil
+		},
 	}
-	output, err = homeClient.Run(ctx, TemplateData{}, time.Second)
+	output, err = homeClient.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}

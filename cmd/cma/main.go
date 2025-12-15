@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"call-my-agent/pkg/agent"
 	"call-my-agent/pkg/codex"
 	"call-my-agent/pkg/config"
+	"call-my-agent/pkg/pi"
 	"call-my-agent/pkg/service"
 	"call-my-agent/pkg/store"
 	"call-my-agent/pkg/telegram"
@@ -26,7 +29,6 @@ type command struct {
 var commands = []command{
 	{name: "start", description: "Start the Telegram bot and process incoming messages", run: runStart},
 	{name: "heartbeat", description: "Trigger a single heartbeat pass", run: runHeartbeat},
-	{name: "status", description: "Print session status information", run: runStatus},
 }
 
 func main() {
@@ -93,64 +95,58 @@ func runHeartbeat(args []string) error {
 	return nil
 }
 
-func runStatus(args []string) error {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	cfgPath := fs.String("config", "config.json", "Path to config file")
-	jsonOut := fs.Bool("json", false, "Print JSON output")
-	limit := fs.Int("limit", 0, "Limit number of sessions in status output")
-	_ = fs.Parse(args)
-
-	_, srv, err := buildServiceWithOptions(*cfgPath, false)
-	if err != nil {
-		return fmt.Errorf("status: %w", err)
-	}
-	opts := service.StatusOptions{JSON: *jsonOut, Limit: *limit}
-	if err := srv.Status(os.Stdout, opts); err != nil {
-		return fmt.Errorf("status: %w", err)
-	}
-	return nil
-}
-
 func buildService(args []string) (*service.Service, error) {
 	fs := flag.NewFlagSet("cma", flag.ExitOnError)
 	cfgPath := fs.String("config", "config.json", "Path to config file")
 	_ = fs.Parse(args)
 
-	_, srv, err := buildServiceFromPath(*cfgPath)
+	srv, err := buildServiceFromPath(*cfgPath)
 	if err != nil {
 		return nil, err
 	}
 	return srv, nil
 }
 
-func buildServiceFromPath(cfgPath string) (config.Config, *service.Service, error) {
-	return buildServiceWithOptions(cfgPath, true)
-}
-
-func buildServiceWithOptions(cfgPath string, requireToken bool) (config.Config, *service.Service, error) {
+func buildServiceFromPath(cfgPath string) (*service.Service, error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return config.Config{}, nil, fmt.Errorf("load config: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	var provider service.MessageProvider
-	if requireToken {
-		token := os.Getenv(tokenEnv)
-		if token == "" {
-			return config.Config{}, nil, fmt.Errorf("%s is required", tokenEnv)
-		}
-		provider = telegram.NewProvider(token, cfg.PollInterval())
+	token := os.Getenv(tokenEnv)
+	if token == "" {
+		return nil, fmt.Errorf("%s is required", tokenEnv)
 	}
+	provider := telegram.NewProvider(token, cfg.PollInterval())
 
-	ai := &codex.ExecClient{
-		CommandTemplate: cfg.Inbound.Reply.Command,
-		WorkingDir:      cfg.Inbound.Reply.Cwd,
+	ai, err := buildAgentRunner(cfg)
+	if err != nil {
+		return nil, err
 	}
 	srv, err := service.New(cfg, provider, ai, nil, store.NewFileSessionStore(cfg.SessionStorePath))
 	if err != nil {
-		return config.Config{}, nil, fmt.Errorf("init service: %w", err)
+		return nil, fmt.Errorf("init service: %w", err)
 	}
-	return cfg, srv, nil
+	return srv, nil
+}
+
+func buildAgentRunner(cfg config.Config) (agent.Runner, error) {
+	name := strings.ToLower(strings.TrimSpace(cfg.Inbound.Reply.Agent))
+	if name == "" {
+		name = "codex"
+	}
+	switch name {
+	case "codex":
+		return &codex.ExecClient{
+			WorkingDir: cfg.Inbound.Reply.Cwd,
+		}, nil
+	case "pi":
+		return &pi.Client{
+			WorkingDir: cfg.Inbound.Reply.Cwd,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown agent %q", cfg.Inbound.Reply.Agent)
+	}
 }
 
 func usage() {

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"call-my-agent/pkg/codex"
+	"call-my-agent/pkg/agent"
 	"call-my-agent/pkg/config"
 	"call-my-agent/pkg/model"
 	"call-my-agent/pkg/session"
@@ -50,7 +50,7 @@ const (
 type Service struct {
 	cfg         config.Config
 	provider    MessageProvider
-	ai          codex.AIClient
+	ai          agent.Runner
 	sessions    *session.Manager
 	clock       session.Clock
 	logger      *log.Logger
@@ -73,7 +73,7 @@ type commandQueue struct {
 }
 
 // New creates a service instance.
-func New(cfg config.Config, provider MessageProvider, ai codex.AIClient, clock session.Clock, sessionStore store.SessionStore) (*Service, error) {
+func New(cfg config.Config, provider MessageProvider, ai agent.Runner, clock session.Clock, sessionStore store.SessionStore) (*Service, error) {
 	if clock == nil {
 		clock = session.RealClock{}
 	}
@@ -233,7 +233,7 @@ func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
 	if reset {
 		s.saveSessions()
 	}
-	task := codex.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, body)
+	task := agent.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, body)
 	s.sessions.Append(sess, "user", body)
 	s.saveSessions()
 
@@ -242,11 +242,11 @@ func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
 	case "static":
 		reply = s.cfg.Inbound.Reply.StaticText
 	case "command":
-		data := codex.PrepareTemplateData(chatID, body, task)
+		req := agent.PrepareRequest(chatID, body, task, s.cfg.Timeout())
 		var err error
-		reply, err = s.ai.Run(ctx, data, s.cfg.Timeout())
+		reply, err = s.ai.Run(ctx, req)
 		if err != nil {
-			return err
+			return s.handleAIError(ctx, chatID, err)
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", s.cfg.Inbound.Reply.Mode)
@@ -262,6 +262,18 @@ func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
 	s.sessions.Append(sess, "assistant", reply)
 	s.saveSessions()
 	return s.provider.Send(ctx, chatID, reply)
+}
+
+func (s *Service) handleAIError(ctx context.Context, chatID string, err error) error {
+	s.logf(levelError, "ai run chat=%s: %v", chatID, err)
+	if s.provider == nil {
+		return nil
+	}
+	message := fmt.Sprintf("Sorry, I couldn't run the coding agent (%v). Please check the server setup.", err)
+	if sendErr := s.provider.Send(ctx, chatID, message); sendErr != nil {
+		s.logf(levelWarn, "send error reply chat=%s: %v", chatID, sendErr)
+	}
+	return nil
 }
 
 func (s *Service) enqueueCommandMessage(ctx context.Context, msg model.InboundMessage) error {
@@ -362,9 +374,9 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 			continue
 		}
 		heartbeatBody := buildHeartbeatPrompt(sess)
-		task := codex.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, heartbeatBody)
-		data := codex.PrepareTemplateData(sess.ChatID, heartbeatBody, task)
-		resp, err := s.ai.Run(ctx, data, s.cfg.Timeout())
+		task := agent.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, heartbeatBody)
+		req := agent.PrepareRequest(sess.ChatID, heartbeatBody, task, s.cfg.Timeout())
+		resp, err := s.ai.Run(ctx, req)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err

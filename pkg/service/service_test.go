@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"call-my-agent/pkg/codex"
+	"call-my-agent/pkg/agent"
 	"call-my-agent/pkg/config"
 	"call-my-agent/pkg/model"
 	"call-my-agent/pkg/whisper"
@@ -32,17 +32,23 @@ func (p *fakeProvider) Send(ctx context.Context, chatID string, text string) err
 type fakeAI struct {
 	responses []string
 	idx       int
-	calls     []codex.TemplateData
+	calls     []agent.Request
 }
 
-func (f *fakeAI) Run(ctx context.Context, data codex.TemplateData, timeout time.Duration) (string, error) {
-	f.calls = append(f.calls, data)
+func (f *fakeAI) Run(ctx context.Context, req agent.Request) (string, error) {
+	f.calls = append(f.calls, req)
 	if f.idx >= len(f.responses) {
 		return "", nil
 	}
 	resp := f.responses[f.idx]
 	f.idx++
 	return resp, nil
+}
+
+type errorAI struct{ err error }
+
+func (e errorAI) Run(ctx context.Context, req agent.Request) (string, error) {
+	return "", e.err
 }
 
 type fixedClock struct{ now time.Time }
@@ -67,7 +73,7 @@ func TestHandleMessageCommandMode(t *testing.T) {
 	cfg := config.Config{
 		Inbound: config.InboundConfig{
 			AllowFrom: []string{"123"},
-			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Command: []string{"cmd", "{{.Task}}"}, Session: config.SessionConfig{IdleMinutes: 60}},
+			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Agent: "codex", Session: config.SessionConfig{IdleMinutes: 60}},
 		},
 	}
 	provider := &fakeProvider{}
@@ -93,7 +99,7 @@ func TestHandleMessageSuppressesHeartbeatOK(t *testing.T) {
 	cfg := config.Config{
 		Inbound: config.InboundConfig{
 			AllowFrom: []string{"123"},
-			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Command: []string{"cmd", "{{.Task}}"}, Session: config.SessionConfig{IdleMinutes: 60}},
+			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Agent: "codex", Session: config.SessionConfig{IdleMinutes: 60}},
 		},
 	}
 	provider := &fakeProvider{}
@@ -161,7 +167,7 @@ func TestHandleMessageTranscribesAudio(t *testing.T) {
 	cfg := config.Config{
 		Inbound: config.InboundConfig{
 			AllowFrom: []string{"123"},
-			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Command: []string{"cmd", "{{.Task}}"}, Session: config.SessionConfig{IdleMinutes: 60}},
+			Reply:     config.ReplyConfig{Mode: "command", BodyPrefix: "system", Agent: "codex", Session: config.SessionConfig{IdleMinutes: 60}},
 		},
 	}
 	provider := &fakeProvider{}
@@ -210,6 +216,41 @@ func TestHandleMessageTranscribeError(t *testing.T) {
 	}
 }
 
+func TestHandleMessageSurfacesAIRunErrors(t *testing.T) {
+	cfg := config.Config{
+		Inbound: config.InboundConfig{
+			AllowFrom: []string{"chat"},
+			Reply: config.ReplyConfig{
+				Mode:    "command",
+				Agent:   "codex",
+				Session: config.SessionConfig{IdleMinutes: 1},
+			},
+		},
+		Logging: config.LoggingConfig{Level: "silent"},
+	}
+	provider := &fakeProvider{}
+	srv, err := New(cfg, provider, errorAI{err: fmt.Errorf("agent missing")}, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	if err := srv.handleMessage(context.Background(), model.InboundMessage{ChatID: "chat", Text: "hi"}); err != nil {
+		t.Fatalf("handleMessage returned error: %v", err)
+	}
+
+	if len(provider.sent) != 1 {
+		t.Fatalf("expected one error reply, got %d", len(provider.sent))
+	}
+	if !strings.Contains(provider.sent[0].Text, "agent missing") {
+		t.Fatalf("unexpected error reply: %q", provider.sent[0].Text)
+	}
+
+	sessions := srv.sessions.Snapshot()
+	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
+		t.Fatalf("expected only user message stored, got %+v", sessions)
+	}
+}
+
 type queueProvider struct {
 	messages []model.InboundMessage
 	sent     []sentMsg
@@ -242,7 +283,8 @@ func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
 		Inbound: config.InboundConfig{
 			AllowFrom: []string{"123"},
 			Reply: config.ReplyConfig{
-				Mode: "command",
+				Mode:  "command",
+				Agent: "codex",
 				Session: config.SessionConfig{
 					IdleMinutes: 60,
 				},

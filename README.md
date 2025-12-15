@@ -25,7 +25,7 @@ The CLI reads a JSON config file (default `config.json`):
       "mode": "command",
       "staticText": "Thanks for your message!",
       "bodyPrefix": "You are a helpful assistant.",
-      "command": ["codex", "exec", "{{.Task}}"],
+      "agent": "codex",
       "cwd": "/home/me/projects/demo",
       "timeoutSeconds": 600,
       "session": {
@@ -47,7 +47,9 @@ The CLI reads a JSON config file (default `config.json`):
 
 Key notes:
 - **Allowed chats**: only chat IDs listed in `inbound.allowFrom` are processed.
-- **Reply modes**: `static` returns `staticText`; `command` shells out to the command template using `{{.Task}}`, `{{.ChatID}}`, `{{.Body}}`, and `{{.BodyStripped}}` placeholders.
+- **Reply modes**: `static` returns `staticText`; `command` shells out via the configured agent tool (`inbound.reply.agent`).
+  - `codex` (default) runs `codex exec "<task>"` using the task built from the message and session context.
+  - `pi` runs the [Pi coding agent CLI](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with `pi -p --no-session ...`.
 - **Sessions**: messages are tracked per chat with idle expiry, `/new` resets history, and `maxMessages` bounds the stored context before persisting it to disk.
 - **Working directory**: `inbound.reply.cwd` (optional) runs all Codex commands, including heartbeats, from a specific directory; omit it to use `cma`'s current directory.
 - **Session store**: conversations are serialized to `sessionStorePath` after each change (defaults to `~/.cma/sessions.json`), so `start`, `heartbeat`, and `status` share the same context.
