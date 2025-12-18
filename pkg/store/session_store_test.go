@@ -19,9 +19,6 @@ func TestFileSessionStoreSaveAndLoad(t *testing.T) {
 		ChatID:    "123",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Messages: []model.Message{
-			{Role: "user", Content: "hi"},
-		},
 	}}
 	if err := store.Save(sessions); err != nil {
 		t.Fatalf("save: %v", err)
@@ -31,7 +28,7 @@ func TestFileSessionStoreSaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(loaded) != 1 || loaded[0].ChatID != "123" || len(loaded[0].Messages) != 1 {
+	if len(loaded) != 1 || loaded[0].ChatID != "123" {
 		t.Fatalf("unexpected sessions %+v", loaded)
 	}
 }
@@ -50,4 +47,3 @@ func TestFileSessionStoreLoadMissingFile(t *testing.T) {
 		t.Fatalf("expected file to be absent, stat err=%v", err)
 	}
 }
-

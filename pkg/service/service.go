@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	heartbeatSummaryLimit   = 5
 	logMessagePreviewLength = 80
 )
 
@@ -237,12 +236,14 @@ func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
 	s.sessions.Append(sess, "user", body)
 	s.saveSessions()
 
+	resume := !reset
+
 	var reply string
 	switch strings.ToLower(s.cfg.Inbound.Reply.Mode) {
 	case "static":
 		reply = s.cfg.Inbound.Reply.StaticText
 	case "command":
-		req := agent.PrepareRequest(chatID, body, task, s.cfg.Timeout())
+		req := agent.PrepareRequest(chatID, body, task, sess.ID, resume, s.cfg.Timeout())
 		var err error
 		reply, err = s.ai.Run(ctx, req)
 		if err != nil {
@@ -375,7 +376,7 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 		}
 		heartbeatBody := buildHeartbeatPrompt(sess)
 		task := agent.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, heartbeatBody)
-		req := agent.PrepareRequest(sess.ChatID, heartbeatBody, task, s.cfg.Timeout())
+		req := agent.PrepareRequest(sess.ChatID, heartbeatBody, task, sess.ID, true, s.cfg.Timeout())
 		resp, err := s.ai.Run(ctx, req)
 		if err != nil {
 			if firstErr == nil {
@@ -541,49 +542,16 @@ func openLogWriter(path string) (io.Writer, error) {
 func buildHeartbeatPrompt(sess *model.Session) string {
 	var b strings.Builder
 	b.WriteString("HEARTBEAT TELEGRAM\n\n")
-	b.WriteString("Recent messages:\n")
-	messages := sess.Messages
-	if len(messages) > heartbeatSummaryLimit {
-		messages = messages[len(messages)-heartbeatSummaryLimit:]
-	}
-	for _, msg := range messages {
-		b.WriteString("- ")
-		b.WriteString(roleLabel(msg.Role))
-		b.WriteString(": ")
-		b.WriteString(msg.Content)
-		b.WriteString("\n")
-	}
+	b.WriteString("Use your existing session context to share anything worth updating the user about.\n")
 	b.WriteString("\nIf there is nothing useful to tell the user, reply with exactly HEARTBEAT_OK.")
 	return b.String()
 }
 
-func roleLabel(role string) string {
-	if role == "" {
-		return role
-	}
-	return strings.ToUpper(role[:1]) + role[1:]
-}
-
 func summarizeSession(sess *model.Session) StatusEntry {
-	var lastUser, lastAssistant string
-	for i := len(sess.Messages) - 1; i >= 0; i-- {
-		msg := sess.Messages[i]
-		if lastUser == "" && msg.Role == "user" {
-			lastUser = msg.Content
-		}
-		if lastAssistant == "" && msg.Role == "assistant" {
-			lastAssistant = msg.Content
-		}
-		if lastUser != "" && lastAssistant != "" {
-			break
-		}
-	}
 	return StatusEntry{
-		SessionID:     sess.ID,
-		ChatID:        sess.ChatID,
-		UpdatedAt:     sess.UpdatedAt,
-		MessageCount:  len(sess.Messages),
-		LastUser:      lastUser,
-		LastAssistant: lastAssistant,
+		SessionID:    sess.ID,
+		ChatID:       sess.ChatID,
+		UpdatedAt:    sess.UpdatedAt,
+		MessageCount: 0,
 	}
 }

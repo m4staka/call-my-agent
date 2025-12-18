@@ -18,16 +18,20 @@ type Request struct {
 	Body         string
 	BodyStripped string
 	ChatID       string
+	SessionID    string
+	Resume       bool
 	Task         string
 	Timeout      time.Duration
 }
 
 // PrepareRequest constructs an agent request payload.
-func PrepareRequest(chatID, body, task string, timeout time.Duration) Request {
+func PrepareRequest(chatID, body, task, sessionID string, resume bool, timeout time.Duration) Request {
 	return Request{
 		Body:         body,
 		BodyStripped: strings.TrimSpace(body),
 		ChatID:       chatID,
+		SessionID:    sessionID,
+		Resume:       resume,
 		Task:         task,
 		Timeout:      timeout,
 	}
@@ -40,10 +44,9 @@ func BuildTask(prefix string, sess *model.Session, userText string) string {
 		b.WriteString(strings.TrimSpace(prefix))
 		b.WriteString("\n\n")
 	}
-	for _, msg := range sess.Messages {
-		b.WriteString(capitalize(msg.Role))
-		b.WriteString(": ")
-		b.WriteString(msg.Content)
+	if sess != nil && sess.ID != "" {
+		b.WriteString("Session ID: ")
+		b.WriteString(sess.ID)
 		b.WriteString("\n")
 	}
 	b.WriteString("User: ")

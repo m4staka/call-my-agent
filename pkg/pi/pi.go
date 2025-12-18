@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"call-my-agent/pkg/agent"
@@ -49,7 +51,30 @@ func buildPiCommand(req agent.Request) ([]string, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, fmt.Errorf("task is required")
 	}
-	args := []string{"pi", "-p", "--no-session"}
+	args := []string{"pi", "-p"}
+	if req.SessionID != "" {
+		path, err := sessionFilePath(req.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--session", path)
+	}
 	args = append(args, req.Task)
 	return args, nil
+}
+
+func sessionFilePath(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("session id is required")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".pi", "agent", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create pi session dir: %w", err)
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s.jsonl", id)), nil
 }

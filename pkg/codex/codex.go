@@ -93,5 +93,13 @@ func buildExecCommand(req agent.Request) ([]string, error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
-	return []string{"codex", "exec", task}, nil
+	args := []string{"codex", "exec"}
+	if req.Resume {
+		if strings.TrimSpace(req.SessionID) == "" {
+			return nil, fmt.Errorf("session ID is required when resuming")
+		}
+		args = append(args, "resume", req.SessionID)
+	}
+	args = append(args, task)
+	return args, nil
 }

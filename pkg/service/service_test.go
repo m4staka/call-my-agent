@@ -90,8 +90,11 @@ func TestHandleMessageCommandMode(t *testing.T) {
 		t.Fatalf("expected provider to send reply, got %+v", provider.sent)
 	}
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 2 {
-		t.Fatalf("expected session messages recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
+	}
+	if len(ai.calls) != 1 || ai.calls[0].SessionID != sessions[0].ID || ai.calls[0].Resume {
+		t.Fatalf("unexpected ai call %+v", ai.calls)
 	}
 }
 
@@ -118,8 +121,8 @@ func TestHandleMessageSuppressesHeartbeatOK(t *testing.T) {
 	}
 
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
-		t.Fatalf("expected only user message recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
 	}
 }
 
@@ -158,8 +161,8 @@ func TestHeartbeatSuppression(t *testing.T) {
 		t.Fatalf("expected proactive message, got %+v", provider.sent)
 	}
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 3 {
-		t.Fatalf("expected heartbeat messages recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
 	}
 }
 
@@ -246,8 +249,8 @@ func TestHandleMessageSurfacesAIRunErrors(t *testing.T) {
 	}
 
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
-		t.Fatalf("expected only user message stored, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session stored, got %+v", sessions)
 	}
 }
 
@@ -344,5 +347,11 @@ func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
 	}
 	if !strings.Contains(ai.calls[1].Body, "second") || !strings.Contains(ai.calls[1].Body, "third") {
 		t.Fatalf("second call body should contain batched messages, got %q", ai.calls[1].Body)
+	}
+	if ai.calls[0].SessionID == "" || ai.calls[0].SessionID != ai.calls[1].SessionID {
+		t.Fatalf("expected shared session IDs, got %+v", ai.calls)
+	}
+	if ai.calls[0].Resume || !ai.calls[1].Resume {
+		t.Fatalf("unexpected resume flags %+v", ai.calls)
 	}
 }

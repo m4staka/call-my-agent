@@ -70,4 +70,3 @@ func (s *FileSessionStore) Save(sessions []*model.Session) error {
 	}
 	return nil
 }
-

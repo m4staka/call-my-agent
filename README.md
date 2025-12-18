@@ -48,9 +48,9 @@ The CLI reads a JSON config file (default `config.json`):
 Key notes:
 - **Allowed chats**: only chat IDs listed in `inbound.allowFrom` are processed.
 - **Reply modes**: `static` returns `staticText`; `command` shells out via the configured agent tool (`inbound.reply.agent`).
-  - `codex` (default) runs `codex exec "<task>"` using the task built from the message and session context.
-  - `pi` runs the [Pi coding agent CLI](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with `pi -p --no-session ...`.
-- **Sessions**: messages are tracked per chat with idle expiry, `/new` resets history, and `maxMessages` bounds the stored context before persisting it to disk.
+  - `codex` (default) runs `codex exec "<task>"` using `codex exec resume <sessionId> ...` for follow-ups so the Codex CLI keeps the conversation state.
+  - `pi` runs the [Pi coding agent CLI](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) with `pi -p --session <path> ...`, storing the session file under `~/.pi/agent/sessions/<sessionId>.jsonl`.
+- **Sessions**: only the session ID and timestamps are persisted per chat (no message copies). Idle expiry and `/new` reset the tracked session ID; continuing a chat reuses the stored ID so the agent's own session management resumes the conversation.
 - **Working directory**: `inbound.reply.cwd` (optional) runs all Codex commands, including heartbeats, from a specific directory; omit it to use `cma`'s current directory.
 - **Session store**: conversations are serialized to `sessionStorePath` after each change (defaults to `~/.cma/sessions.json`), so `start`, `heartbeat`, and `status` share the same context.
 - **Heartbeats**: set `inbound.heartbeatMinutes` to `0` to disable; heartbeat prompts follow the `HEARTBEAT TELEGRAM` convention and suppress `HEARTBEAT_OK`.

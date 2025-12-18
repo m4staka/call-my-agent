@@ -19,18 +19,10 @@ type Audio struct {
 	Data     []byte
 }
 
-// Message represents a conversation turn stored in a session.
-type Message struct {
-	Role      string
-	Content   string
-	Timestamp time.Time
-}
-
-// Session captures a per-chat conversation history.
+// Session captures minimal per-chat metadata.
 type Session struct {
 	ID        string
 	ChatID    string
-	Messages  []Message
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

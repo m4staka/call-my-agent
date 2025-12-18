@@ -26,6 +26,22 @@ func TestBuildExecCommand(t *testing.T) {
 	}
 }
 
+func TestBuildExecCommandResume(t *testing.T) {
+	args, err := buildExecCommand(agent.Request{Task: "next", Resume: true, SessionID: "sess-1"})
+	if err != nil {
+		t.Fatalf("buildExecCommand returned error: %v", err)
+	}
+	want := []string{"codex", "exec", "resume", "sess-1", "next"}
+	if len(args) != len(want) {
+		t.Fatalf("expected args %v, got %v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("expected args %v, got %v", want, args)
+		}
+	}
+}
+
 func TestExecClientRunUsesWorkingDir(t *testing.T) {
 	client := ExecClient{
 		WorkingDir: t.TempDir(),

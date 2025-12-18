@@ -47,45 +47,33 @@ func TestAppendByID(t *testing.T) {
 	clk := &fakeClock{now: time.Now()}
 	mgr := NewManager(10, nil, 0, clk)
 	sess, _ := mgr.Get("chat", "hello")
+	updatedAt := sess.UpdatedAt
+	clk.now = clk.now.Add(time.Minute)
 	if ok := mgr.AppendByID("chat", sess.ID, "assistant", "reply"); !ok {
 		t.Fatalf("expected append to succeed")
 	}
 	snapshot := mgr.Snapshot()
-	if len(snapshot) != 1 || len(snapshot[0].Messages) != 1 {
-		t.Fatalf("expected one recorded message, got %+v", snapshot)
+	if len(snapshot) != 1 {
+		t.Fatalf("expected one recorded session, got %+v", snapshot)
+	}
+	if !snapshot[0].UpdatedAt.After(updatedAt) {
+		t.Fatalf("expected UpdatedAt to change after append")
 	}
 	if ok := mgr.AppendByID("chat", "other", "assistant", "nope"); ok {
 		t.Fatalf("expected append to fail for mismatched session")
 	}
 }
 
-func TestMaxMessagesBound(t *testing.T) {
-	clk := &fakeClock{now: time.Now()}
-	mgr := NewManager(10, nil, 2, clk)
-	sess, _ := mgr.Get("chat", "hello")
-	mgr.Append(sess, "user", "m1")
-	mgr.Append(sess, "assistant", "m2")
-	mgr.Append(sess, "user", "m3")
-	snapshot := mgr.Snapshot()
-	if len(snapshot[0].Messages) != 2 {
-		t.Fatalf("expected messages to be bounded, got %d", len(snapshot[0].Messages))
-	}
-	if snapshot[0].Messages[0].Content != "m2" || snapshot[0].Messages[1].Content != "m3" {
-		t.Fatalf("unexpected messages %+v", snapshot[0].Messages)
-	}
-}
-
 func TestSnapshotDeepCopy(t *testing.T) {
 	clk := &fakeClock{now: time.Now()}
 	mgr := NewManager(10, nil, 0, clk)
-	sess, _ := mgr.Get("chat", "hello")
-	mgr.Append(sess, "user", "hi")
+	_, _ = mgr.Get("chat", "hello")
 	snapshot := mgr.Snapshot()
 	if len(snapshot) != 1 {
 		t.Fatalf("expected snapshot")
 	}
-	snapshot[0].Messages = nil
-	if len(mgr.Snapshot()[0].Messages) == 0 {
+	snapshot[0].ID = "different"
+	if mgr.Snapshot()[0].ID == "different" {
 		t.Fatalf("modifying snapshot should not mutate manager state")
 	}
 }

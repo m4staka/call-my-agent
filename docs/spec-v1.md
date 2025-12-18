@@ -115,9 +115,9 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
 
    - Build the `task` string for `codex exec` based on:
      - `bodyPrefix`,
-     - session context (optional N last messages),
+     - session metadata (ID only, the agent owns message history),
      - current user message (with `/new` stripped if needed).
-  - Run the selected CLI (`codex exec "<task>"` for Codex; `pi -p --no-session` for Pi) as a subprocess (agent comes from config).
+  - Run the selected CLI (`codex exec "<task>"` for Codex; `codex exec resume <id> <task>` on follow-ups; `pi -p --session <path>` for Pi) as a subprocess (agent comes from config).
      - Use the docs’ guarantee that progress goes to stderr and the **final agent message** goes to stdout. 14  
    - Respect `timeoutSeconds`.
    - Strip trailing whitespace; return the final string to the caller.
@@ -129,17 +129,16 @@ Architecture and configuration are heavily inspired by **warelay** (`steipete/wa
    Responsibilities:
 
    - Maintain sessions keyed by `ChatId`.
-   - Track:
-     - `SessionId` (UUID),
+   - Track only:
+     - `SessionId` (UUID used for Codex `resume` or Pi `--session`),
      - `ChatId`,
-     - `CreatedAt`, `UpdatedAt`,
-     - `Messages` (bounded list of recent `(role, content)` pairs),
-     - Optional `Metadata` (for future Codex thread IDs – not required in v1).
+     - `CreatedAt`, `UpdatedAt`.
+   - Do **not** duplicate conversation messages; rely on the agent to persist and resume the dialogue.
 
    - Enforce:
      - `idleMinutes`: if now − `UpdatedAt` > `idleMinutes`, new session.
-     - `resetTriggers`: if user text starts with `/new` (or configured trigger), new session (similar to warelay’s `/new` behavior). 16  
-   - Storage: simple local file (e.g., JSON) refreshed on each change, similar to warelay’s `~/.warelay/sessions.json` concept. 17  
+     - `resetTriggers`: if user text starts with `/new` (or configured trigger), new session (similar to warelay’s `/new` behavior). 16
+   - Storage: simple local file (e.g., JSON) refreshed on each change, similar to warelay’s `~/.warelay/sessions.json` concept. 17
 
 6. **Heartbeat Scheduler**
 
