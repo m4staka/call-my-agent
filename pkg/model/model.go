@@ -21,10 +21,11 @@ type Audio struct {
 
 // Session captures minimal per-chat metadata.
 type Session struct {
-	ID        string
-	ChatID    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             string
+	AgentSessionID string
+	ChatID         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // AllowedChat returns true when the inbound chat ID is permitted.

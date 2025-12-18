@@ -10,7 +10,7 @@ import (
 
 // Runner executes coding agents (Codex, Pi, etc.).
 type Runner interface {
-	Run(ctx context.Context, req Request) (string, error)
+	Run(ctx context.Context, req Request) (Result, error)
 }
 
 // Request captures the data sent to an agent invocation.
@@ -22,6 +22,12 @@ type Request struct {
 	Resume       bool
 	Task         string
 	Timeout      time.Duration
+}
+
+// Result captures the response from an agent invocation.
+type Result struct {
+	Reply     string
+	SessionID string
 }
 
 // PrepareRequest constructs an agent request payload.
@@ -44,21 +50,18 @@ func BuildTask(prefix string, sess *model.Session, userText string) string {
 		b.WriteString(strings.TrimSpace(prefix))
 		b.WriteString("\n\n")
 	}
-	if sess != nil && sess.ID != "" {
-		b.WriteString("Session ID: ")
-		b.WriteString(sess.ID)
-		b.WriteString("\n")
+	if sess != nil {
+		id := strings.TrimSpace(sess.AgentSessionID)
+		if id == "" {
+			id = strings.TrimSpace(sess.ID)
+		}
+		if id != "" {
+			b.WriteString("Session ID: ")
+			b.WriteString(id)
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString("User: ")
 	b.WriteString(userText)
 	return b.String()
-}
-
-func capitalize(text string) string {
-	if text == "" {
-		return text
-	}
-	r := []rune(text)
-	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
-	return string(r)
 }

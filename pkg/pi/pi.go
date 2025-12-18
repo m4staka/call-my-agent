@@ -19,14 +19,14 @@ type Client struct {
 }
 
 // Run invokes the Pi CLI.
-func (c Client) Run(ctx context.Context, req agent.Request) (string, error) {
+func (c Client) Run(ctx context.Context, req agent.Request) (agent.Result, error) {
 	builder := c.commandBuilder
 	if builder == nil {
 		builder = buildPiCommand
 	}
 	args, err := builder(req)
 	if err != nil {
-		return "", err
+		return agent.Result{}, err
 	}
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -42,9 +42,9 @@ func (c Client) Run(ctx context.Context, req agent.Request) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("pi exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return agent.Result{}, fmt.Errorf("pi exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return agent.Result{Reply: strings.TrimSpace(stdout.String()), SessionID: strings.TrimSpace(req.SessionID)}, nil
 }
 
 func buildPiCommand(req agent.Request) ([]string, error) {

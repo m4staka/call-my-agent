@@ -3,10 +3,12 @@ package codex
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"call-my-agent/pkg/agent"
@@ -19,17 +21,17 @@ type ExecClient struct {
 }
 
 // Run executes the Codex CLI with the provided request data.
-func (c ExecClient) Run(ctx context.Context, req agent.Request) (string, error) {
+func (c ExecClient) Run(ctx context.Context, req agent.Request) (agent.Result, error) {
 	builder := c.commandBuilder
 	if builder == nil {
 		builder = buildExecCommand
 	}
 	args, err := builder(req)
 	if err != nil {
-		return "", err
+		return agent.Result{}, err
 	}
 	if len(args) == 0 {
-		return "", fmt.Errorf("codex command is empty")
+		return agent.Result{}, fmt.Errorf("codex command is empty")
 	}
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -37,6 +39,19 @@ func (c ExecClient) Run(ctx context.Context, req agent.Request) (string, error) 
 		runCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 		defer cancel()
 	}
+	useJSONOutput := len(args) >= 2 && args[0] == "codex" && args[1] == "exec"
+	outputPath := ""
+	cleanup := func() {}
+	if useJSONOutput {
+		var err error
+		outputPath, cleanup, err = newLastMessageFile()
+		if err != nil {
+			return agent.Result{}, err
+		}
+		defer cleanup()
+		args = injectExecOutputFlags(args, outputPath)
+	}
+
 	cmd := exec.CommandContext(runCtx, args[0], args[1:]...)
 	if resolved := c.resolveWorkingDir(); resolved != "" {
 		cmd.Dir = resolved
@@ -45,9 +60,21 @@ func (c ExecClient) Run(ctx context.Context, req agent.Request) (string, error) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("codex exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return agent.Result{}, fmt.Errorf("codex exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	reply := strings.TrimSpace(stdout.String())
+	sessionID := strings.TrimSpace(req.SessionID)
+	if useJSONOutput {
+		var err error
+		reply, err = readLastMessage(outputPath)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		if sessionID == "" {
+			sessionID = extractSessionID(stdout.String())
+		}
+	}
+	return agent.Result{Reply: reply, SessionID: sessionID}, nil
 }
 
 func (c ExecClient) resolveWorkingDir() string {
@@ -93,7 +120,7 @@ func buildExecCommand(req agent.Request) ([]string, error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
-	args := []string{"codex", "exec"}
+	args := []string{"codex", "exec", "--yolo"}
 	if req.Resume {
 		if strings.TrimSpace(req.SessionID) == "" {
 			return nil, fmt.Errorf("session ID is required when resuming")
@@ -102,4 +129,105 @@ func buildExecCommand(req agent.Request) ([]string, error) {
 	}
 	args = append(args, task)
 	return args, nil
+}
+
+func injectExecOutputFlags(args []string, outputPath string) []string {
+	if len(args) < 2 || args[0] != "codex" || args[1] != "exec" {
+		return args
+	}
+	if outputPath == "" {
+		return args
+	}
+	// Ensure we can extract both the last assistant message and the session id.
+	// - `--output-last-message` provides the final reply as plain text.
+	// - `--json` prints structured events to stdout where session id is reported.
+	flags := []string{"--json", "--output-last-message", outputPath}
+	out := make([]string, 0, len(args)+len(flags))
+	out = append(out, args[:2]...)
+	out = append(out, flags...)
+	out = append(out, args[2:]...)
+	return out
+}
+
+func newLastMessageFile() (string, func(), error) {
+	f, err := os.CreateTemp("", "cma-codex-last-message-*.txt")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create temp output file: %w", err)
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", func() {}, fmt.Errorf("close temp output file: %w", err)
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func readLastMessage(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read codex reply file: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+var uuidRE = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+
+func extractSessionID(jsonl string) string {
+	jsonl = strings.TrimSpace(jsonl)
+	if jsonl == "" {
+		return ""
+	}
+
+	var best string
+	for _, line := range strings.Split(jsonl, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var v any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			continue
+		}
+		if id := findSessionID(v); id != "" {
+			best = id
+		}
+	}
+	if best != "" {
+		return best
+	}
+	// Fallback for unexpected event formats.
+	if match := uuidRE.FindString(jsonl); match != "" {
+		return match
+	}
+	return ""
+}
+
+func findSessionID(v any) string {
+	switch val := v.(type) {
+	case map[string]any:
+		// Prefer explicit session id keys.
+		for _, key := range []string{"session_id", "sessionId", "conversation_id", "conversationId"} {
+			if raw, ok := val[key]; ok {
+				if s, ok := raw.(string); ok && uuidRE.MatchString(s) {
+					return s
+				}
+			}
+		}
+		// Search nested maps/slices for session-looking ids.
+		for k, raw := range val {
+			if s, ok := raw.(string); ok && strings.Contains(strings.ToLower(k), "session") && uuidRE.MatchString(s) {
+				return s
+			}
+			if id := findSessionID(raw); id != "" {
+				return id
+			}
+		}
+	case []any:
+		for _, item := range val {
+			if id := findSessionID(item); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }

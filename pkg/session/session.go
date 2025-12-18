@@ -81,6 +81,22 @@ func (m *Manager) AppendByID(chatID, sessionID, role, content string) bool {
 	return true
 }
 
+// SetAgentSessionID records the agent-provided session ID for an existing session.
+func (m *Manager) SetAgentSessionID(chatID, sessionID, agentSessionID string) bool {
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.sessions[chatID]
+	if !ok || sess.ID != sessionID {
+		return false
+	}
+	sess.AgentSessionID = agentSessionID
+	return true
+}
+
 // ExpireIdleSessions removes sessions idle beyond the configured limit.
 func (m *Manager) ExpireIdleSessions() bool {
 	m.mu.Lock()
@@ -121,7 +137,7 @@ func (m *Manager) shouldReset(sess *model.Session, text string, now time.Time) b
 		return true
 	}
 	for _, trigger := range m.resets {
-		if strings.HasPrefix(strings.TrimSpace(text), trigger) {
+		if hasResetTrigger(text, trigger) {
 			return true
 		}
 	}
@@ -148,4 +164,17 @@ func newID() string {
 func (m *Manager) touch(sess *model.Session) {
 	now := m.clock.Now()
 	sess.UpdatedAt = now
+}
+
+func hasResetTrigger(text, trigger string) bool {
+	trigger = strings.TrimSpace(trigger)
+	if trigger == "" {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), trigger) {
+			return true
+		}
+	}
+	return false
 }

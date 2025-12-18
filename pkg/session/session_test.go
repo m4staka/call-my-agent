@@ -43,6 +43,23 @@ func TestResetTrigger(t *testing.T) {
 	}
 }
 
+func TestResetTriggerInBatchedMessage(t *testing.T) {
+	clk := &fakeClock{now: time.Now()}
+	mgr := NewManager(10, []string{"/new"}, 0, clk)
+	sess1, _ := mgr.Get("chat", "first pending message")
+	if sess1.ID == "" {
+		t.Fatalf("expected initial session")
+	}
+	combined := "status update\n\n/new start over\n\nnext task"
+	sess2, reset := mgr.Get("chat", combined)
+	if !reset {
+		t.Fatalf("expected reset when later line starts with trigger")
+	}
+	if sess1.ID == sess2.ID {
+		t.Fatalf("expected new session ID, got same %q", sess1.ID)
+	}
+}
+
 func TestAppendByID(t *testing.T) {
 	clk := &fakeClock{now: time.Now()}
 	mgr := NewManager(10, nil, 0, clk)

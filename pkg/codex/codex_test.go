@@ -15,7 +15,7 @@ func TestBuildExecCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExecCommand returned error: %v", err)
 	}
-	want := []string{"codex", "exec", "do thing"}
+	want := []string{"codex", "exec", "--yolo", "do thing"}
 	if len(args) != len(want) {
 		t.Fatalf("expected args %v, got %v", want, args)
 	}
@@ -31,7 +31,7 @@ func TestBuildExecCommandResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExecCommand returned error: %v", err)
 	}
-	want := []string{"codex", "exec", "resume", "sess-1", "next"}
+	want := []string{"codex", "exec", "--yolo", "resume", "sess-1", "next"}
 	if len(args) != len(want) {
 		t.Fatalf("expected args %v, got %v", want, args)
 	}
@@ -50,12 +50,12 @@ func TestExecClientRunUsesWorkingDir(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
+	res, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	if output != client.WorkingDir {
-		t.Fatalf("expected output %q, got %q", client.WorkingDir, output)
+	if res.Reply != client.WorkingDir {
+		t.Fatalf("expected output %q, got %q", client.WorkingDir, res.Reply)
 	}
 }
 
@@ -67,13 +67,13 @@ func TestExecClientRunInvalidWorkingDir(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
+	res, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	cwd, _ := os.Getwd()
-	if output != cwd {
-		t.Fatalf("expected fallback to process cwd %q, got %q", cwd, output)
+	if res.Reply != cwd {
+		t.Fatalf("expected fallback to process cwd %q, got %q", cwd, res.Reply)
 	}
 }
 
@@ -100,12 +100,12 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	output, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
+	res, err := client.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	if output != nested {
-		t.Fatalf("expected resolved cwd %q, got %q", nested, output)
+	if res.Reply != nested {
+		t.Fatalf("expected resolved cwd %q, got %q", nested, res.Reply)
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -118,12 +118,12 @@ func TestResolveWorkingDirSupportsRelativeAndHome(t *testing.T) {
 			return []string{"/bin/sh", "-c", "pwd"}, nil
 		},
 	}
-	output, err = homeClient.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
+	res, err = homeClient.Run(ctx, agent.Request{Timeout: time.Second, Task: "pwd"})
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	cleanedHome := filepath.Clean(homeDir)
-	if output != cleanedHome {
-		t.Fatalf("expected home directory %q, got %q", cleanedHome, output)
+	if res.Reply != cleanedHome {
+		t.Fatalf("expected home directory %q, got %q", cleanedHome, res.Reply)
 	}
 }
