@@ -2,13 +2,11 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +20,6 @@ import (
 )
 
 const (
-	heartbeatSummaryLimit   = 5
 	logMessagePreviewLength = 80
 )
 
@@ -237,16 +234,30 @@ func (s *Service) processBatch(ctx context.Context, chatID, body string) error {
 	s.sessions.Append(sess, "user", body)
 	s.saveSessions()
 
+	// Resume only when we did not reset; fresh sessions must start without resume so the
+	// agent opens a new conversation on /new or idle expiry.
+	sessionID := strings.TrimSpace(sess.AgentSessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(sess.ID)
+	}
+	resume := !reset && shouldResumeAgentSession(s.cfg.Inbound.Reply.Agent, sess.AgentSessionID)
+
 	var reply string
 	switch strings.ToLower(s.cfg.Inbound.Reply.Mode) {
 	case "static":
 		reply = s.cfg.Inbound.Reply.StaticText
 	case "command":
-		req := agent.PrepareRequest(chatID, body, task, s.cfg.Timeout())
+		req := agent.PrepareRequest(chatID, body, task, sessionID, resume, s.cfg.Timeout())
 		var err error
-		reply, err = s.ai.Run(ctx, req)
+		res, err := s.ai.Run(ctx, req)
 		if err != nil {
 			return s.handleAIError(ctx, chatID, err)
+		}
+		reply = res.Reply
+		if strings.TrimSpace(res.SessionID) != "" && strings.TrimSpace(sess.AgentSessionID) != strings.TrimSpace(res.SessionID) {
+			if s.sessions.SetAgentSessionID(chatID, sess.ID, res.SessionID) {
+				s.saveSessions()
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", s.cfg.Inbound.Reply.Mode)
@@ -373,10 +384,13 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 		if now.Sub(sess.UpdatedAt) > idleLimit {
 			continue
 		}
+		if !shouldResumeAgentSession(s.cfg.Inbound.Reply.Agent, sess.AgentSessionID) {
+			continue
+		}
 		heartbeatBody := buildHeartbeatPrompt(sess)
 		task := agent.BuildTask(s.cfg.Inbound.Reply.BodyPrefix, sess, heartbeatBody)
-		req := agent.PrepareRequest(sess.ChatID, heartbeatBody, task, s.cfg.Timeout())
-		resp, err := s.ai.Run(ctx, req)
+		req := agent.PrepareRequest(sess.ChatID, heartbeatBody, task, sess.AgentSessionID, true, s.cfg.Timeout())
+		res, err := s.ai.Run(ctx, req)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -384,16 +398,16 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 			s.logf(levelWarn, "heartbeat ai.Run chat=%s: %v", sess.ChatID, err)
 			continue
 		}
-		if strings.TrimSpace(resp) == "HEARTBEAT_OK" {
+		if strings.TrimSpace(res.Reply) == "HEARTBEAT_OK" {
 			continue
 		}
 		if s.sessions.AppendByID(sess.ChatID, sess.ID, "system", heartbeatBody) {
 			changed = true
 		}
-		if s.sessions.AppendByID(sess.ChatID, sess.ID, "assistant", resp) {
+		if s.sessions.AppendByID(sess.ChatID, sess.ID, "assistant", res.Reply) {
 			changed = true
 		}
-		if err := s.provider.Send(ctx, sess.ChatID, resp); err != nil {
+		if err := s.provider.Send(ctx, sess.ChatID, res.Reply); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -409,58 +423,6 @@ func (s *Service) RunHeartbeat(ctx context.Context) error {
 		s.saveSessions()
 	}
 	return firstErr
-}
-
-// StatusOptions controls status output.
-type StatusOptions struct {
-	JSON  bool
-	Limit int
-}
-
-// StatusEntry describes one session for status reporting.
-type StatusEntry struct {
-	SessionID     string    `json:"sessionId"`
-	ChatID        string    `json:"chatId"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	MessageCount  int       `json:"messageCount"`
-	LastUser      string    `json:"lastUser"`
-	LastAssistant string    `json:"lastAssistant"`
-}
-
-// Status prints a status report to the writer.
-func (s *Service) Status(w io.Writer, opts StatusOptions) error {
-	sessions := s.sessions.Snapshot()
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
-	})
-	entries := make([]StatusEntry, 0, len(sessions))
-	for _, sess := range sessions {
-		entry := summarizeSession(sess)
-		entries = append(entries, entry)
-		if opts.Limit > 0 && len(entries) >= opts.Limit {
-			break
-		}
-	}
-	if opts.JSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(entries)
-	}
-	for _, entry := range entries {
-		if _, err := fmt.Fprintf(
-			w,
-			"Session %s chat %s updated=%s messages=%d lastUser=%q lastAssistant=%q\n",
-			entry.SessionID,
-			entry.ChatID,
-			entry.UpdatedAt.Format(time.RFC3339),
-			entry.MessageCount,
-			entry.LastUser,
-			entry.LastAssistant,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Service) saveSessions() {
@@ -541,49 +503,17 @@ func openLogWriter(path string) (io.Writer, error) {
 func buildHeartbeatPrompt(sess *model.Session) string {
 	var b strings.Builder
 	b.WriteString("HEARTBEAT TELEGRAM\n\n")
-	b.WriteString("Recent messages:\n")
-	messages := sess.Messages
-	if len(messages) > heartbeatSummaryLimit {
-		messages = messages[len(messages)-heartbeatSummaryLimit:]
-	}
-	for _, msg := range messages {
-		b.WriteString("- ")
-		b.WriteString(roleLabel(msg.Role))
-		b.WriteString(": ")
-		b.WriteString(msg.Content)
-		b.WriteString("\n")
-	}
+	b.WriteString("Use your existing session context to share anything worth updating the user about.\n")
 	b.WriteString("\nIf there is nothing useful to tell the user, reply with exactly HEARTBEAT_OK.")
 	return b.String()
 }
 
-func roleLabel(role string) string {
-	if role == "" {
-		return role
-	}
-	return strings.ToUpper(role[:1]) + role[1:]
-}
-
-func summarizeSession(sess *model.Session) StatusEntry {
-	var lastUser, lastAssistant string
-	for i := len(sess.Messages) - 1; i >= 0; i-- {
-		msg := sess.Messages[i]
-		if lastUser == "" && msg.Role == "user" {
-			lastUser = msg.Content
-		}
-		if lastAssistant == "" && msg.Role == "assistant" {
-			lastAssistant = msg.Content
-		}
-		if lastUser != "" && lastAssistant != "" {
-			break
-		}
-	}
-	return StatusEntry{
-		SessionID:     sess.ID,
-		ChatID:        sess.ChatID,
-		UpdatedAt:     sess.UpdatedAt,
-		MessageCount:  len(sess.Messages),
-		LastUser:      lastUser,
-		LastAssistant: lastAssistant,
+func shouldResumeAgentSession(agentName string, agentSessionID string) bool {
+	agentName = strings.ToLower(strings.TrimSpace(agentName))
+	switch agentName {
+	case "", "codex":
+		return strings.TrimSpace(agentSessionID) != ""
+	default:
+		return strings.TrimSpace(agentSessionID) != ""
 	}
 }

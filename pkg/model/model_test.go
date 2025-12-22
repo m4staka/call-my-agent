@@ -19,8 +19,3 @@ func TestAllowedChatWildcard(t *testing.T) {
 		t.Fatalf("expected wildcard mixed with other IDs to allow any chat")
 	}
 }
-
-
-
-
-

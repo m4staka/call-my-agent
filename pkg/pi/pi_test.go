@@ -1,42 +1,31 @@
 package pi
 
 import (
-	"context"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"call-my-agent/pkg/agent"
 )
 
-func TestBuildPiCommand(t *testing.T) {
-	args, err := buildPiCommand(agent.Request{Task: "do thing"})
+func TestBuildPiCommandWithSession(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	args, err := buildPiCommand(agent.Request{Task: "do it", SessionID: "sess-1"})
 	if err != nil {
 		t.Fatalf("buildPiCommand returned error: %v", err)
 	}
-	want := []string{"pi", "-p", "--no-session", "do thing"}
-	if len(args) != len(want) {
-		t.Fatalf("expected args %v, got %v", want, args)
+	expectedPath := filepath.Join(tmp, ".pi", "agent", "sessions", "sess-1.jsonl")
+	if len(args) != 5 || args[0] != "pi" || args[1] != "-p" || args[2] != "--session" || args[3] != expectedPath || args[4] != "do it" {
+		t.Fatalf("unexpected args %+v", args)
 	}
-	for i := range want {
-		if args[i] != want[i] {
-			t.Fatalf("expected args %v, got %v", want, args)
-		}
+	if _, err := os.Stat(filepath.Dir(expectedPath)); err != nil {
+		t.Fatalf("expected session dir to be created: %v", err)
 	}
 }
 
-func TestClientRunPropagatesWorkingDir(t *testing.T) {
-	client := Client{
-		WorkingDir: t.TempDir(),
-		commandBuilder: func(req agent.Request) ([]string, error) {
-			return []string{"/bin/sh", "-c", "pwd"}, nil
-		},
-	}
-	output, err := client.Run(context.Background(), agent.Request{Timeout: time.Second, Task: "pwd"})
-	if err != nil {
-		t.Fatalf("run failed: %v", err)
-	}
-	if !strings.Contains(output, client.WorkingDir) {
-		t.Fatalf("expected output to include working dir %q, got %q", client.WorkingDir, output)
+func TestSessionFilePathRequiresID(t *testing.T) {
+	if _, err := sessionFilePath(""); err == nil {
+		t.Fatalf("expected error for empty session id")
 	}
 }

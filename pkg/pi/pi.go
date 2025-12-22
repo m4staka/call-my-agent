@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"call-my-agent/pkg/agent"
@@ -17,14 +19,14 @@ type Client struct {
 }
 
 // Run invokes the Pi CLI.
-func (c Client) Run(ctx context.Context, req agent.Request) (string, error) {
+func (c Client) Run(ctx context.Context, req agent.Request) (agent.Result, error) {
 	builder := c.commandBuilder
 	if builder == nil {
 		builder = buildPiCommand
 	}
 	args, err := builder(req)
 	if err != nil {
-		return "", err
+		return agent.Result{}, err
 	}
 	runCtx := ctx
 	var cancel context.CancelFunc
@@ -40,16 +42,39 @@ func (c Client) Run(ctx context.Context, req agent.Request) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("pi exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return agent.Result{}, fmt.Errorf("pi exec failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return agent.Result{Reply: strings.TrimSpace(stdout.String()), SessionID: strings.TrimSpace(req.SessionID)}, nil
 }
 
 func buildPiCommand(req agent.Request) ([]string, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, fmt.Errorf("task is required")
 	}
-	args := []string{"pi", "-p", "--no-session"}
+	args := []string{"pi", "-p"}
+	if req.SessionID != "" {
+		path, err := sessionFilePath(req.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--session", path)
+	}
 	args = append(args, req.Task)
 	return args, nil
+}
+
+func sessionFilePath(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("session id is required")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	dir := filepath.Join(home, ".pi", "agent", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create pi session dir: %w", err)
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s.jsonl", id)), nil
 }

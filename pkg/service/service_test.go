@@ -30,15 +30,15 @@ func (p *fakeProvider) Send(ctx context.Context, chatID string, text string) err
 }
 
 type fakeAI struct {
-	responses []string
+	responses []agent.Result
 	idx       int
 	calls     []agent.Request
 }
 
-func (f *fakeAI) Run(ctx context.Context, req agent.Request) (string, error) {
+func (f *fakeAI) Run(ctx context.Context, req agent.Request) (agent.Result, error) {
 	f.calls = append(f.calls, req)
 	if f.idx >= len(f.responses) {
-		return "", nil
+		return agent.Result{}, nil
 	}
 	resp := f.responses[f.idx]
 	f.idx++
@@ -47,8 +47,8 @@ func (f *fakeAI) Run(ctx context.Context, req agent.Request) (string, error) {
 
 type errorAI struct{ err error }
 
-func (e errorAI) Run(ctx context.Context, req agent.Request) (string, error) {
-	return "", e.err
+func (e errorAI) Run(ctx context.Context, req agent.Request) (agent.Result, error) {
+	return agent.Result{}, e.err
 }
 
 type fixedClock struct{ now time.Time }
@@ -77,7 +77,7 @@ func TestHandleMessageCommandMode(t *testing.T) {
 		},
 	}
 	provider := &fakeProvider{}
-	ai := &fakeAI{responses: []string{"reply"}}
+	ai := &fakeAI{responses: []agent.Result{{Reply: "reply", SessionID: "11111111-1111-1111-1111-111111111111"}}}
 	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -90,8 +90,14 @@ func TestHandleMessageCommandMode(t *testing.T) {
 		t.Fatalf("expected provider to send reply, got %+v", provider.sent)
 	}
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 2 {
-		t.Fatalf("expected session messages recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
+	}
+	if sessions[0].AgentSessionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected agent session ID to be recorded, got %+v", sessions[0])
+	}
+	if len(ai.calls) != 1 || ai.calls[0].SessionID != sessions[0].ID || ai.calls[0].Resume {
+		t.Fatalf("unexpected ai call %+v", ai.calls)
 	}
 }
 
@@ -103,7 +109,7 @@ func TestHandleMessageSuppressesHeartbeatOK(t *testing.T) {
 		},
 	}
 	provider := &fakeProvider{}
-	ai := &fakeAI{responses: []string{"HEARTBEAT_OK"}}
+	ai := &fakeAI{responses: []agent.Result{{Reply: "HEARTBEAT_OK", SessionID: "11111111-1111-1111-1111-111111111111"}}}
 	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -118,8 +124,8 @@ func TestHandleMessageSuppressesHeartbeatOK(t *testing.T) {
 	}
 
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
-		t.Fatalf("expected only user message recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
 	}
 }
 
@@ -133,13 +139,16 @@ func TestHeartbeatSuppression(t *testing.T) {
 	provider := &fakeProvider{}
 	clock := fixedClock{now: time.Now()}
 
-	ai := &fakeAI{responses: []string{"HEARTBEAT_OK"}}
+	ai := &fakeAI{responses: []agent.Result{{Reply: "HEARTBEAT_OK"}}}
 	srv, err := New(cfg, provider, ai, clock, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 
 	sess, _ := srv.sessions.Get("123", "hello")
+	if ok := srv.sessions.SetAgentSessionID(sess.ChatID, sess.ID, "11111111-1111-1111-1111-111111111111"); !ok {
+		t.Fatalf("expected to set agent session id")
+	}
 	srv.sessions.Append(sess, "user", "hello")
 
 	if err := srv.RunHeartbeat(context.Background()); err != nil {
@@ -149,7 +158,7 @@ func TestHeartbeatSuppression(t *testing.T) {
 		t.Fatalf("expected no messages for HEARTBEAT_OK, got %d", len(provider.sent))
 	}
 
-	ai.responses = []string{"proactive"}
+	ai.responses = []agent.Result{{Reply: "proactive"}}
 	ai.idx = 0
 	if err := srv.RunHeartbeat(context.Background()); err != nil {
 		t.Fatalf("heartbeat error: %v", err)
@@ -158,8 +167,8 @@ func TestHeartbeatSuppression(t *testing.T) {
 		t.Fatalf("expected proactive message, got %+v", provider.sent)
 	}
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 3 {
-		t.Fatalf("expected heartbeat messages recorded, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session recorded, got %+v", sessions)
 	}
 }
 
@@ -171,7 +180,7 @@ func TestHandleMessageTranscribesAudio(t *testing.T) {
 		},
 	}
 	provider := &fakeProvider{}
-	ai := &fakeAI{responses: []string{"reply"}}
+	ai := &fakeAI{responses: []agent.Result{{Reply: "reply", SessionID: "11111111-1111-1111-1111-111111111111"}}}
 	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -197,7 +206,7 @@ func TestHandleMessageTranscribesAudio(t *testing.T) {
 func TestHandleMessageTranscribeError(t *testing.T) {
 	cfg := config.Config{Inbound: config.InboundConfig{AllowFrom: []string{"123"}, Reply: config.ReplyConfig{Mode: "static", StaticText: "n/a", Session: config.SessionConfig{IdleMinutes: 60}}}}
 	provider := &fakeProvider{}
-	ai := &fakeAI{responses: []string{"unused"}}
+	ai := &fakeAI{responses: []agent.Result{{Reply: "unused"}}}
 	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -246,8 +255,8 @@ func TestHandleMessageSurfacesAIRunErrors(t *testing.T) {
 	}
 
 	sessions := srv.sessions.Snapshot()
-	if len(sessions) != 1 || len(sessions[0].Messages) != 1 {
-		t.Fatalf("expected only user message stored, got %+v", sessions)
+	if len(sessions) != 1 || sessions[0].ID == "" {
+		t.Fatalf("expected session stored, got %+v", sessions)
 	}
 }
 
@@ -278,6 +287,73 @@ func (p *queueProvider) Send(ctx context.Context, chatID string, text string) er
 	return nil
 }
 
+func TestServiceResumesFollowUpMessage(t *testing.T) {
+	cfg := config.Config{
+		Inbound: config.InboundConfig{
+			AllowFrom: []string{"123"},
+			Reply: config.ReplyConfig{
+				Mode:  "command",
+				Agent: "codex",
+				Session: config.SessionConfig{
+					IdleMinutes: 60,
+				},
+			},
+		},
+		Logging: config.LoggingConfig{Level: "silent"},
+	}
+	provider := &queueProvider{
+		messages: []model.InboundMessage{
+			{ChatID: "123", Text: "hello"},
+			{ChatID: "123", Text: "still there?"},
+		},
+	}
+	ai := &fakeAI{responses: []agent.Result{
+		{Reply: "hi!", SessionID: "11111111-1111-1111-1111-111111111111"},
+		{Reply: "yup"},
+	}}
+	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Start(ctx)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(ai.calls) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("service start returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("service did not shut down after context cancellation")
+	}
+
+	if len(ai.calls) != 2 {
+		t.Fatalf("expected 2 AI calls, got %d", len(ai.calls))
+	}
+	if ai.calls[1].SessionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected follow-up to use agent session ID, got %+v", ai.calls)
+	}
+	if ai.calls[0].Resume {
+		t.Fatalf("first call should not resume: %+v", ai.calls[0])
+	}
+	if !ai.calls[1].Resume {
+		t.Fatalf("second call should resume: %+v", ai.calls[1])
+	}
+}
+
 func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
 	cfg := config.Config{
 		Inbound: config.InboundConfig{
@@ -300,7 +376,10 @@ func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
 			{ChatID: "123", Text: "third"},
 		},
 	}
-	ai := &fakeAI{responses: []string{"r1", "r2"}}
+	ai := &fakeAI{responses: []agent.Result{
+		{Reply: "r1", SessionID: "11111111-1111-1111-1111-111111111111"},
+		{Reply: "r2"},
+	}}
 	srv, err := New(cfg, provider, ai, fixedClock{now: time.Now()}, nil)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -344,5 +423,11 @@ func TestCommandQueueBatchesMessagesPerChat(t *testing.T) {
 	}
 	if !strings.Contains(ai.calls[1].Body, "second") || !strings.Contains(ai.calls[1].Body, "third") {
 		t.Fatalf("second call body should contain batched messages, got %q", ai.calls[1].Body)
+	}
+	if ai.calls[1].SessionID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected follow-up to use agent session ID, got %+v", ai.calls)
+	}
+	if ai.calls[0].Resume || !ai.calls[1].Resume {
+		t.Fatalf("unexpected resume flags %+v", ai.calls)
 	}
 }
